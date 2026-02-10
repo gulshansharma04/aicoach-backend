@@ -101,7 +101,9 @@ app = FastAPI(title="AI Coaches: Voice + Vision")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # dev only. Lock down for production.
+    allow_origins=[
+    "https://698ab9a8f7b4d12a5ea27653--gentle-blini-1031d6.netlify.app"
+],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
