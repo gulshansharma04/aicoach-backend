@@ -1,0 +1,125 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+  <title>AI Coaches</title>
+  <link rel="stylesheet" href="./style.css">
+  <link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#6ea8ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+
+  <style>
+    .hero { padding: 18px; }
+    .coach-grid{
+      display:grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap:14px;
+      margin-top:14px;
+    }
+    .coach-card{
+      padding:16px;
+      border:1px solid var(--border);
+      border-radius:14px;
+      background: rgba(15,26,53,0.55);
+      cursor:pointer;
+      transition: transform .06s ease, background .2s ease;
+    }
+    .coach-card:hover{
+      transform: translateY(-2px);
+      background: rgba(22,36,80,0.65);
+    }
+    .coach-card h2{
+      margin:0 0 6px 0;
+      font-size:14px;
+    }
+    .coach-card p{
+      margin:0;
+      color:var(--muted);
+      font-size:13px;
+      line-height:1.5;
+    }
+    @media (max-width: 980px){
+      .coach-grid{ grid-template-columns: 1fr; }
+    }
+  </style>
+  <script src="./config.js"></script>
+</head>
+<body>
+
+  <div class="container">
+
+    <!-- ===== Top Bar ===== -->
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo"></div>
+        <div>
+          <h1>AI Coaches</h1>
+          <p>Welcome to your personalized AI coach</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Navigation Bar ===== -->
+    <div class="navbar">
+      <div class="nav-left" onclick="location.href='index.html'">
+        <div class="logo" style="width:30px;height:30px;border-radius:10px;"></div>
+        <div class="nav-title">
+          <strong>AI Coaches</strong>
+          <span id="navSubtitle">Welcome</span>
+        </div>
+      </div>
+
+      <div class="nav-links">
+        <button class="nav-link active" id="navHome"  onclick="location.href='index.html'">Home</button>
+        <button class="nav-link" id="navBat"   onclick="location.href='batting.html'">Batting</button>
+        <button class="nav-link" id="navFood"  onclick="location.href='food.html'">Food</button>
+        <button class="nav-link" id="navCoach" onclick="location.href='coach.html'">General</button>
+      </div>
+    </div>
+
+    <!-- ===== Main Card ===== -->
+    <div class="card" style="margin-top:14px;">
+      <div class="card-body hero">
+        <h2 style="margin:0 0 6px 0; font-size:15px;">Choose your coach</h2>
+        <p style="margin:0; color:var(--muted);">
+          Pick the topic you need help with — batting, food health, or general questions.
+        </p>
+
+        <div class="coach-grid">
+
+          <div class="coach-card" onclick="location.href='batting.html'">
+            <h2>⚾ Baseball Batting Coach</h2>
+            <p>
+              Real-time stance feedback using camera + voice.
+              Say “Go” to analyze your setup.
+            </p>
+          </div>
+
+          <div class="coach-card" onclick="location.href='food.html'">
+            <h2>🥗 Food Analyzer</h2>
+            <p>
+              Show your food to the camera and learn whether it’s
+              Healthy, Mixed, or Junk — plus calorie estimates.
+            </p>
+          </div>
+
+          <div class="coach-card" onclick="location.href='coach.html'">
+            <h2>💬 General Coach</h2>
+            <p>
+              Ask questions like ChatGPT and get clear, helpful,
+              coach-style answers.
+            </p>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</body>
+</html>

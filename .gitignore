@@ -1,0 +1,23 @@
+# Node
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# Android build
+android/.gradle/
+android/build/
+android/app/build/
+
+# Capacitor
+android/.idea/
+android/local.properties
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,232 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Batting Coach</title>
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#6ea8ff">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+
+  <link rel="stylesheet" href="./style.css">
+  <script src="./config.js"></script>
+  <script src="capacitor.js"></script>
+</head>
+
+<body>
+  <div class="container">
+
+    <!-- TOP BAR -->
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <h1>Batting Coach</h1>
+          <p>Real-time stance feedback • Voice + camera</p>
+        </div>
+      </div>
+
+      <button id="backBtn" class="btn btn-ghost">← Back</button>
+    </div>
+
+    <div class="grid">
+
+      <!-- ================= COLUMN 1: SETUP ================= -->
+      <div>
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">
+              <h2>Setup</h2>
+            </div>
+          </div>
+
+          <div class="card-body">
+
+            <!-- Handedness inline -->
+            <div class="kv" style="align-items:center;">
+              <span>Handedness</span>
+              <select id="handedSelect" class="btn" style="padding:6px 10px;">
+                <option value="">Select</option>
+                <option value="right">Right</option>
+                <option value="left">Left</option>
+              </select>
+            </div>
+
+            <!-- Collapsible setup help -->
+            <details class="details" id="setupHelp" style="margin-top:12px;">
+              <summary class="details-summary">
+                Setup help (tips + stance guide)
+              </summary>
+
+              <div class="details-body">
+                <ul class="ul" style="margin-top:8px;">
+                  <li><b>Stand sideways</b> (profile view).</li>
+                  <li><b>Camera in front</b> of you at chest height.</li>
+                  <li>Step back <b>6–8 feet</b>.</li>
+                  <li>Avoid bright windows behind you.</li>
+                </ul>
+
+                <img
+                  class="guide"
+                  src="./stance_guide.png"
+                  alt="Stance guide"
+                  style="margin-top:12px;"
+                />
+              </div>
+            </details>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- ================= COLUMN 2: CAMERA + ACTIONS ================= -->
+      <div>
+        <div class="card">
+
+          <!-- Header row = controls -->
+          <div class="card-head">
+            <div class="actions actions-compact" style="width:100%; justify-content:space-between;">
+              <select id="camFacing" class="btn" style="padding:6px 10px;">
+                <option value="environment">Rear</option>
+                <option value="user">Front</option>
+              </select>
+
+              <div class="actions actions-compact">
+                <button class="btn btn-primary" id="startBtn">Start</button>
+                <button class="btn btn-danger" id="stopBtn">Stop</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="video-wrap">
+              <video id="video" autoplay playsinline muted></video>
+              <canvas id="overlay"></canvas>
+
+              <div class="overlay" id="camOverlay">
+                <div class="overlay-card">
+                  <div class="spinner"></div>
+                  <div>
+                    <div class="overlay-title" id="overlayTitle">Loading…</div>
+                    <div class="overlay-sub" id="overlaySub">
+                      Preparing camera + pose model
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ================= COLUMN 3: ASSISTANT ================= -->
+      <div>
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">
+              <h2>Assistant</h2>
+              <span>One fix at a time</span>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="feedback">
+
+              <!-- Record Button (for iOS fallback and general recording) -->
+              <div style="margin-bottom:12px;">
+                <button id="record-btn" class="btn btn-secondary" type="button">Record</button>
+                <small style="display:block; margin-top:6px; color:#666;">
+                  Tap to record a short clip (iOS fallback for voice). On Android/Chrome real-time voice may still work.
+                </small>
+              </div>
+
+              <div class="note good">
+                <h3>Good job</h3>
+                <div id="posText">—</div>
+              </div>
+
+              <div class="note bad">
+                <h3>One thing to work on</h3>
+                <div id="impText">—</div>
+              </div>
+
+              <details class="details" id="assistantMore">
+                <summary class="details-summary">More details</summary>
+                <div class="details-body">
+
+                  <div class="note" style="margin-top:10px;">
+                    <h3>Response</h3>
+                    <div id="answer">—</div>
+                  </div>
+
+                  <div class="note" style="margin-top:10px;">
+                    <h3>You said</h3>
+                    <div id="userText">—</div>
+                  </div>
+
+                  <div class="note" style="margin-top:10px;">
+                    <div class="note-head">
+                      <h3>Debug</h3>
+                      <button class="btn btn-ghost btn-xs"
+                              id="toggleDebugBtn"
+                              type="button">
+                        Show
+                      </button>
+                    </div>
+                    <div class="debug" id="debug"></div>
+                  </div>
+
+                </div>
+              </details>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- grid -->
+  </div><!-- container -->
+
+  <!-- Recorder lib (local) -->
+  <script src="./recorder.js"></script>
+  <script>
+    // Wire up recorder button and handle the transcription result.
+    // Uses AIRecorder.recordFixedDuration and dispatches aiCoachTranscribed event.
+    try {
+      // Create the button behaviour (3s default)
+      if (window.AIRecorder && typeof window.AIRecorder.createRecorderButton === 'function') {
+        AIRecorder.createRecorderButton({ targetSelector: '#record-btn', durationMs: 3000 });
+      } else {
+        console.warn('AIRecorder not loaded yet.');
+      }
+
+      // When we receive transcription, show it in the UI and call handler
+      window.addEventListener('aiCoachTranscribed', (ev) => {
+        const detail = ev.detail || {};
+        const text = (detail.text || '').trim();
+        // show in the "You said" area
+        const userText = document.getElementById('userText');
+        if (userText) userText.innerText = text || '—';
+
+        // hook for your app's analyze flow - implement this in app.js to integrate
+        if (typeof window.handleVoiceTranscript === 'function') {
+          try { window.handleVoiceTranscript(text); } catch (e) { console.error(e); }
+        } else {
+          // fallback: log / populate answer area
+          console.log('Transcript received:', text);
+        }
+      });
+    } catch (e) {
+      console.error('Recorder wiring failed', e);
+    }
+  </script>
+
+  <!-- JS -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection@2.1.3/dist/pose-detection.min.js"></script>
+  <script src="./app.js?v=2005"></script>
+</body>
+</html>

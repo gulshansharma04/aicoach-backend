@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>General Coach</title>
+  <link rel="stylesheet" href="./style.css">
+  <style>
+    .chatlog{ max-height: 520px; overflow:auto; display:flex; flex-direction:column; gap:10px; }
+    .bubble{ padding:12px; border-radius:12px; border:1px solid var(--border); background: rgba(15,26,53,0.55); }
+    .bubble.user{ border-color: rgba(110,168,255,0.35); }
+    .bubble.ai{ border-color: rgba(52,211,153,0.25); }
+    .chatrow{ display:flex; gap:10px; margin-top:10px; }
+    input.chat{ flex:1; padding:12px; border-radius:12px; border:1px solid var(--border); background: rgba(5,8,21,0.55); color: var(--text); }
+  </style>
+  <script src="./config.js"></script>
+</head>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <div class="brand" style="cursor:pointer" onclick="location.href='index.html'">
+        <div class="logo"></div>
+        <div>
+          <h1>General Coach</h1>
+          <p>Ask anything • Clear answers</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <div class="card-body">
+        <div class="chatlog" id="chatlog"></div>
+
+        <div class="chatrow">
+          <input class="chat" id="q" placeholder="Type your question…" />
+          <button class="btn btn-primary" id="ask">Ask</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const API_CHAT = (window.AI_COACH_CONFIG?.apiUrl ? window.AI_COACH_CONFIG.apiUrl("/api/chat") : "http://localhost:8000/api/chat");
+const log = document.getElementById("chatlog");
+const q = document.getElementById("q");
+const ask = document.getElementById("ask");
+
+function addBubble(text, cls){
+  const d = document.createElement("div");
+  d.className = "bubble " + cls;
+  d.textContent = text;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function send(){
+  const text = (q.value || "").trim();
+  if (!text) return;
+  q.value = "";
+  addBubble(text, "user");
+  addBubble("Thinking…", "ai");
+
+  const res = await fetch(API_CHAT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question: text })
+  });
+
+  // replace last bubble
+  const last = log.lastChild;
+
+  if (!res.ok) {
+    last.textContent = "Sorry — something went wrong.";
+    return;
+  }
+  const data = await res.json();
+  last.textContent = data.answer || "—";
+}
+
+ask.onclick = send;
+q.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+
+addBubble("Welcome! Ask me anything.", "ai");
+</script>
+</body>
+</html>

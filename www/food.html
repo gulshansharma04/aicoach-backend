@@ -1,0 +1,172 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Food Analyzer</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./config.js"></script>
+  <script src="capacitor.js"></script>
+</head>
+
+<body>
+  <div class="container">
+
+    <!-- Topbar -->
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <h1>Food Analyzer</h1>
+          <p>Capture → analyze → get guidance</p>
+        </div>
+      </div>
+
+      <div class="chips">
+        <button id="backBtn" class="btn btn-ghost">← Back</button>
+      </div>
+    </div>
+
+    <div class="grid food-grid">
+
+      <!-- COLUMN 1: ACTIONS + PREVIEW -->
+      <div>
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">
+              <h2>Capture</h2>
+              <span>Analysis starts automatically after you take a photo</span>
+            </div>
+          </div>
+
+          <div class="card-body">
+
+            <!-- ACTION ROW -->
+            <div class="actions" style="align-items:center; gap:10px; flex-wrap:wrap;">
+              <button id="takePhotoBtn" class="btn btn-primary">Take Photo</button>
+
+              <select
+                id="foodCamFacing"
+                class="btn"
+                style="padding:8px 10px; min-width:90px;"
+                aria-label="Camera selection"
+              >
+                <option value="environment">Rear</option>
+                <option value="user">Front</option>
+              </select>
+            </div>
+
+            <!-- Photo preview -->
+            <div class="food-preview">
+              <img id="foodPreview" alt="Captured food" style="display:none;" />
+
+              <div id="foodPreviewEmpty" class="note" style="margin-top:10px;">
+                Take a photo to preview it here.
+              </div>
+
+              <!-- Status (used during auto-analysis) -->
+              <div id="foodStatus" class="note" style="margin-top:10px; display:none;">
+                Analyzing…
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- COLUMN 2: RESULTS -->
+      <div>
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">
+              <h2>Results</h2>
+              <span>General nutrition guidance</span>
+            </div>
+          </div>
+
+          <div class="card-body">
+            <div class="feedback">
+
+              <!-- General Nutrition Facts -->
+              <div class="note">
+                <h3>General Nutrition Facts</h3>
+
+                <div class="row" style="gap:10px; margin-top:8px;">
+                  <div class="chip" style="background: rgba(110,168,255,0.18);">
+                    <span>Classification</span>
+                    <strong id="resultClassification" style="margin-left:6px;">—</strong>
+                  </div>
+
+                  <div class="chip">
+                    <span>Confidence</span>
+                    <strong id="resultConfidence" style="margin-left:6px;">—</strong>
+                  </div>
+                </div>
+
+                <div style="margin-top:10px;">
+                  <div style="color:var(--muted); font-size:12px; margin-bottom:6px;">Detected items</div>
+                  <div id="resultItems">—</div>
+                </div>
+              </div>
+
+              <!-- Nutrition Breakdown -->
+              <div class="note good">
+                <h3>Nutrition Breakdown</h3>
+                <div id="resultNutritionBreakdown">—</div>
+              </div>
+
+              <!-- Quality Signals -->
+              <div class="note">
+                <h3>Quality Signals</h3>
+                <div id="resultQualitySignals">—</div>
+              </div>
+
+              <!-- Calorie Details -->
+              <div class="note">
+                <h3>Calorie Details</h3>
+                <div id="resultCaloriesDetails">—</div>
+              </div>
+
+              <!-- Behavior Coaching -->
+              <div class="note warn">
+                <h3>Behavior Coaching</h3>
+                <div id="resultBehaviorCoaching">—</div>
+              </div>
+
+              <!-- Notes -->
+              <div class="note">
+                <h3>Notes</h3>
+                <div id="resultNotes">—</div>
+              </div>
+
+              <!-- Helpful Tips -->
+              <div class="note good">
+                <h3>Helpful Tips</h3>
+                <div id="resultHelpfulTips">—</div>
+              </div>
+
+              <!-- Debug -->
+              <div class="note">
+                <div class="note-head">
+                  <h3>Debug</h3>
+                  <button class="btn btn-ghost btn-xs" id="toggleDebugBtn" type="button">Show</button>
+                </div>
+                <div class="debug" id="debug"></div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="./food.js?v=3002"></script>
+
+  <script>
+    document.getElementById("backBtn")?.addEventListener("click", () => {
+      location.href = "index.html";
+    });
+  </script>
+</body>
+</html>
