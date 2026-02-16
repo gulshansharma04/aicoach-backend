@@ -279,7 +279,16 @@ async def stt_upload(audio: UploadFile = File(...)):
         #  - Call Google Speech-to-Text
         #
         # For now, return a placeholder so you can verify the upload + conversion flow.
-        text = "TRANSCRIPTION_PLACEHOLDER"
+        from openai import OpenAI
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+        with open(wav_path, "rb") as f:
+            transcription = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=f
+    )
+    text = transcription.text
+
 
         return {"text": text}
 
