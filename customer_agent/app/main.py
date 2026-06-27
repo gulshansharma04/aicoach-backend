@@ -10,6 +10,7 @@ A world-class CRM copilot for independent distributors:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -66,6 +67,16 @@ app.add_middleware(
 @app.on_event("startup")
 def _startup() -> None:
     db.init_db()
+    # Optional: seed demo customers on first boot (handy for cloud test deploys).
+    if os.getenv("CRM_AUTOSEED") == "1":
+        with db.get_conn() as conn:
+            n = conn.execute("SELECT COUNT(*) AS c FROM customers").fetchone()["c"]
+        if n == 0:
+            try:
+                from .seed import seed
+                seed()
+            except Exception:
+                pass
 
 
 # ============================================================

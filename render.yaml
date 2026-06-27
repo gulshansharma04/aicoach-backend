@@ -1,0 +1,18 @@
+# Render Blueprint for the Distributor Buddy AI agent.
+# Deploy: render.com -> New + -> Blueprint -> connect this repo & branch.
+# Free tier; SQLite data is ephemeral (resets on redeploy) which is fine for testing.
+services:
+  - type: web
+    name: distributor-buddy
+    runtime: docker
+    plan: free
+    dockerfilePath: ./customer_agent/Dockerfile
+    dockerContext: ./customer_agent
+    autoDeploy: true
+    envVars:
+      - key: CRM_DEV_OTP        # 2FA code is returned on-screen (no SMS provider needed)
+        value: "1"
+      - key: CRM_AUTOSEED       # load demo customers on first boot
+        value: "1"
+      - key: OPENAI_API_KEY     # optional: set in dashboard to enable richer AI
+        sync: false
