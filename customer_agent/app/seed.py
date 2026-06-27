@@ -29,7 +29,9 @@ CUSTOMERS = [
         "orders": [{"product": "Energy Bundle", "amount": 220.0, "days": 5, "status": "delivered"},
                    {"product": "Skincare Set", "amount": 145.0, "days": 40, "status": "delivered"}],
         "activities": [{"platform": "instagram", "kind": "comment",
-                        "content": "I absolutely love these products, recommend to everyone!", "days": 3}],
+                        "content": "I absolutely love these products, recommend to everyone!", "days": 3},
+                       {"platform": "instagram", "kind": "post",
+                        "content": "Back in town this weekend visiting family — so good to be home!", "days": 2}],
         "interactions": [{"channel": "call", "summary": "Checked in, she's thrilled.", "days": 4}],
         "progress": [{"title": "Become a brand ambassador", "status": "in_progress", "note": "Sharing weekly."}],
     },
@@ -141,7 +143,26 @@ def seed() -> None:
                     "INSERT INTO progress (customer_id,title,status,note,created_at) VALUES (?,?,?,?,?)",
                     (cid, p["title"], p["status"], p["note"], _ago(20)),
                 )
-    print(f"Seeded {len(CUSTOMERS)} customers into {db.DB_PATH}")
+        # ---- A default communication plan + a couple of enrollments ----
+        from . import agent_ops
+        plan_id = agent_ops.create_plan(
+            conn, "New Customer Welcome",
+            "A 30-day nurture cadence for brand-new customers.",
+            [
+                {"day_offset": 0, "channel": "text", "goal": "Welcome them and confirm their order arrived", "risk": "low"},
+                {"day_offset": 3, "channel": "text", "goal": "Share a quick usage tip and ask how it's going", "risk": "low"},
+                {"day_offset": 10, "channel": "call", "goal": "Personal check-in call to answer questions", "risk": "sensitive"},
+                {"day_offset": 21, "channel": "text", "goal": "Offer a reorder and a complementary product", "risk": "low"},
+            ],
+        )
+        # Enroll the newer/active customers; back-date so the first step is due now.
+        names = ("Priya Patel", "Aisha Bello")
+        for nm in names:
+            row = conn.execute("SELECT id FROM customers WHERE name = ?", (nm,)).fetchone()
+            if row:
+                agent_ops.enroll(conn, row["id"], plan_id)
+
+    print(f"Seeded {len(CUSTOMERS)} customers + 1 plan into {db.DB_PATH}")
 
 
 if __name__ == "__main__":

@@ -105,6 +105,19 @@ _POS_WORDS = {
 }
 
 
+_TRAVEL_WORDS = {
+    "in town", "back in town", "visiting", "traveling", "travelling", "on vacation",
+    "vacation", "trip", "landed in", "arrived in", "flying to", "heading to",
+    "just moved", "now in", "weekend in", "exploring", "road trip", "back home",
+}
+
+
+def detect_travel(text: str) -> bool:
+    """True if a social post hints the customer is traveling / in a new town."""
+    t = (text or "").lower()
+    return any(w in t for w in _TRAVEL_WORDS)
+
+
 def detect_sentiment(text: str) -> str:
     """Lightweight, dependency-free sentiment for social comments."""
     t = (text or "").lower()
@@ -289,6 +302,155 @@ def _fallback_briefing(focus: List[Dict[str, Any]], totals: Dict[str, Any]) -> s
     parts.append(" I've prepared draft messages and reminders for each — "
                  "knock out the urgent calls first, then the check-ins.")
     return "".join(parts)
+
+
+# ============================================================
+# Social reply drafting
+# ============================================================
+
+def draft_reply(customer: Dict[str, Any], activity: Dict[str, Any]) -> str:
+    """Draft a public reply/comment to a customer's social post."""
+    name = (customer.get("name") or "there").split()[0]
+    content = activity.get("content", "")
+    platform = activity.get("platform", "social")
+    sentiment = activity.get("sentiment", "neutral")
+    fallback = _fallback_reply(name, content, sentiment)
+
+    system = (
+        "You write short, warm, on-brand public replies to a customer's social "
+        "media post for an independent distributor. 1-2 sentences, friendly, "
+        "human, never salesy or robotic. If the post is negative, be empathetic "
+        "and move the conversation to DM/call. Output JSON only."
+    )
+    user = (
+        f"Platform: {platform}. Customer first name: {name}. Sentiment: {sentiment}.\n"
+        f"Their post: \"{content}\"\n"
+        'Return JSON exactly: {"reply": "..."}'
+    )
+    data = _chat_json(system, user, max_tokens=160)
+    if data and str(data.get("reply", "")).strip():
+        return str(data["reply"]).strip()
+    return fallback
+
+
+def _fallback_reply(first: str, content: str, sentiment: str) -> str:
+    if sentiment == "negative":
+        return (f"So sorry to hear that, {first} — I want to make this right. "
+                f"I'll send you a quick DM so we can sort it out. 🙏")
+    if sentiment == "positive":
+        return f"Love this, {first}! 🙌 Thank you so much for sharing — you're amazing!"
+    return f"Thanks for sharing, {first}! 😊 Let me know if you ever need anything."
+
+
+# ============================================================
+# Morning briefing narration (voice-ready)
+# ============================================================
+
+def narrate_briefing(data: Dict[str, Any]) -> str:
+    """Turn the structured briefing into a spoken-style paragraph for TTS."""
+    fallback = _fallback_narration(data)
+    system = (
+        "You are Jarvis — a warm, concise, upbeat personal AI assistant for an "
+        "independent distributor. Read them a short spoken morning briefing "
+        "(4-7 sentences) from the data. Sound natural and human, like you're "
+        "talking, not reading a report. No markdown, no bullet points, no emojis."
+    )
+    user = f"Briefing data:\n{data}\n\nSpeak the briefing now."
+    text = _chat_text(system, user, max_tokens=320)
+    return text or fallback
+
+
+def _fallback_narration(d: Dict[str, Any]) -> str:
+    s = d.get("stats", {})
+    parts = ["Good morning! Here's your rundown."]
+    if s.get("new_customers"):
+        parts.append(f"You've got {s['new_customers']} new customer(s) since we last spoke.")
+    if s.get("ordered_customers"):
+        parts.append(
+            f"{s['ordered_customers']} customer(s) visited your site and placed orders, "
+            f"totaling {s.get('order_revenue', 0):.0f} dollars.")
+    if s.get("in_town"):
+        names = ", ".join(c["name"] for c in d.get("in_town", [])[:3])
+        parts.append(f"{s['in_town']} customer(s) look like they're traveling or in town right now, including {names}.")
+    if s.get("posts_reviewed"):
+        parts.append(
+            f"I reviewed {s['posts_reviewed']} social post(s) and replied to "
+            f"{s.get('posts_replied', 0)} of them automatically.")
+    if s.get("pending_approvals"):
+        parts.append(f"{s['pending_approvals']} message(s) are waiting for your approval before I send them.")
+    ns = d.get("next_steps", [])
+    if ns:
+        first = ns[0]
+        parts.append(f"Your top priority is {first['name']}: {first['action']}.")
+        if len(ns) > 1:
+            parts.append(f"After that, check in on {', '.join(n['name'] for n in ns[1:3])}.")
+    if len(parts) == 1:
+        parts.append("Everything's quiet — a great day to nurture your healthy customers.")
+    return " ".join(parts)
+
+
+# ============================================================
+# Content inspiration (e.g. repost based on Herbalife CEO news)
+# ============================================================
+
+def content_ideas(topic: str, source_post: str = "", platforms: Optional[List[str]] = None,
+                  n: int = 3) -> List[Dict[str, str]]:
+    """
+    Turn a trending topic / source post (e.g. the latest Herbalife CEO post)
+    into ready-to-publish repost drafts for the distributor's own socials.
+    """
+    platforms = platforms or ["instagram", "facebook"]
+    fallback = _fallback_content(topic, platforms, n)
+
+    system = (
+        "You are a social-media ghostwriter for an independent Herbalife "
+        "distributor. Turn the source/topic into original, authentic, "
+        "compliant repost ideas in the distributor's own voice — inspirational "
+        "and community-focused, NOT making income or health claims. Each idea "
+        "has a platform, a caption, and 3-5 hashtags. Output JSON only."
+    )
+    user = (
+        f"Topic: {topic}\n"
+        f"Source post (for inspiration, do NOT copy verbatim): \"{source_post}\"\n"
+        f"Platforms: {platforms}. Produce {n} ideas.\n"
+        'Return JSON exactly: {"ideas": [{"platform": "...", "caption": "...", "hashtags": "#a #b"}]}'
+    )
+    data = _chat_json(system, user, max_tokens=600)
+    if data and isinstance(data.get("ideas"), list) and data["ideas"]:
+        out = []
+        for it in data["ideas"][:n]:
+            out.append({
+                "platform": str(it.get("platform", platforms[0])),
+                "caption": str(it.get("caption", "")).strip(),
+                "hashtags": str(it.get("hashtags", "")).strip(),
+            })
+        if any(o["caption"] for o in out):
+            return out
+    return fallback
+
+
+def _fallback_content(topic: str, platforms: List[str], n: int) -> List[Dict[str, str]]:
+    templates = [
+        ("Loved seeing the latest from our leadership on {t}. "
+         "It's a great reminder of why I do what I do — helping people feel their best. "
+         "DM me if you want to start your own journey! 💪",
+         "#herbalifelife #wellnessjourney #community #motivation"),
+        ("Big inspiration today around {t}. Proud to be part of a community focused on "
+         "healthy, active lifestyles. What's one healthy habit you're building this week? 👇",
+         "#healthyliving #nutrition #goals #mindset"),
+        ("{t} got me thinking about consistency. Small steps every day add up. "
+         "Here to support you — let's do this together! 🌱",
+         "#consistency #wellness #support #lifestyle"),
+    ]
+    out = []
+    for i in range(min(n, len(templates))):
+        cap, tags = templates[i]
+        out.append({
+            "platform": platforms[i % len(platforms)],
+            "caption": cap.format(t=topic or "our mission"),
+            "hashtags": tags,
+        })
+    return out
 
 
 # ============================================================

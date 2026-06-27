@@ -19,11 +19,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import database as db
-from . import ai_agent, scoring
+from . import ai_agent, scoring, agent_ops
+from . import connectors
 from .scoring import iso_now
 from .models import (
     CustomerCreate, CustomerUpdate, ProgressCreate, OrderCreate, ActivityCreate,
     InteractionCreate, ReminderCreate, ReminderUpdate, ChatRequest, DraftRequest,
+    PlanCreate, EnrollRequest, ActionDecision, ContentIdeaRequest,
 )
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -396,6 +398,143 @@ def agent_chat(req: ChatRequest) -> Dict[str, Any]:
 
     answer = ai_agent.agent_chat(req.message, context)
     return {"answer": answer, "ai_enabled": ai_agent.ai_available()}
+
+
+# ============================================================
+# Communication plans & enrollments
+# ============================================================
+
+@app.get("/api/plans")
+def list_plans() -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        return {"plans": agent_ops.list_plans(conn)}
+
+
+@app.post("/api/plans", status_code=201)
+def create_plan(payload: PlanCreate) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        pid = agent_ops.create_plan(
+            conn, payload.name, payload.description,
+            [s.model_dump() for s in payload.steps])
+        plans = agent_ops.list_plans(conn)
+    return next((p for p in plans if p["id"] == pid), {"id": pid})
+
+
+@app.post("/api/enrollments", status_code=201)
+def enroll(payload: EnrollRequest) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        try:
+            return agent_ops.enroll(conn, payload.customer_id, payload.plan_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/customers/{customer_id}/enrollments")
+def customer_enrollments(customer_id: int) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        rows = db.rows_to_list(conn.execute(
+            """SELECT e.*, p.name AS plan_name FROM enrollments e
+               JOIN comm_plans p ON p.id = e.plan_id
+               WHERE e.customer_id = ? ORDER BY e.started_at DESC""", (customer_id,)))
+    return {"enrollments": rows}
+
+
+# ============================================================
+# Autonomous operations: tick, monitor, actions, briefing
+# ============================================================
+
+@app.post("/api/agent/tick")
+def agent_tick() -> Dict[str, Any]:
+    """Advance all due communication-plan steps (call from a scheduler/cron)."""
+    with db.get_conn() as conn:
+        return agent_ops.tick(conn)
+
+
+@app.post("/api/agent/monitor")
+def agent_monitor(days: int = 14) -> Dict[str, Any]:
+    """Review recent social activity and apply the autonomy policy."""
+    with db.get_conn() as conn:
+        return agent_ops.monitor(conn, days=days)
+
+
+@app.get("/api/agent/briefing")
+def agent_briefing(days: int = 7, run_agent: bool = True) -> Dict[str, Any]:
+    """The morning 'open the app' rundown (text + voice narration)."""
+    with db.get_conn() as conn:
+        return agent_ops.build_briefing(conn, days=days, run_agent=run_agent)
+
+
+@app.get("/api/agent/actions")
+def list_actions(status: Optional[str] = "pending") -> Dict[str, Any]:
+    q = """SELECT a.*, c.name AS customer_name FROM agent_actions a
+           JOIN customers c ON c.id = a.customer_id"""
+    params: List[Any] = []
+    if status and status != "all":
+        q += " WHERE a.status = ?"
+        params.append(status)
+    q += " ORDER BY a.created_at DESC LIMIT 200"
+    with db.get_conn() as conn:
+        rows = db.rows_to_list(conn.execute(q, params))
+    return {"actions": rows, "count": len(rows)}
+
+
+@app.patch("/api/agent/actions/{action_id}")
+def decide_action(action_id: int, payload: ActionDecision) -> Dict[str, Any]:
+    """Approve (send) or reject a queued sensitive action."""
+    new_status = "approved" if payload.decision == "approve" else "rejected"
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT * FROM agent_actions WHERE id = ?", (action_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Action not found")
+        action = db.row_to_dict(row)
+        draft = payload.edited_draft if payload.edited_draft is not None else action["draft"]
+        conn.execute("UPDATE agent_actions SET status = ?, draft = ? WHERE id = ?",
+                     (new_status, draft, action_id))
+        if new_status == "approved":
+            # record the outreach as a real interaction
+            conn.execute(
+                "INSERT INTO interactions (customer_id,channel,summary,occurred_at) VALUES (?,?,?,?)",
+                (action["customer_id"], action["channel"] or "social",
+                 f"[approved] {action['summary']}", iso_now()))
+        row = conn.execute("SELECT * FROM agent_actions WHERE id = ?", (action_id,)).fetchone()
+    return db.row_to_dict(row)
+
+
+# ============================================================
+# External connectors (Herbalife, social) — scaffolding
+# ============================================================
+
+@app.get("/api/connectors")
+def connectors_status() -> Dict[str, Any]:
+    return connectors.status()
+
+
+@app.post("/api/connectors/herbalife/sync")
+def herbalife_sync() -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        return connectors.sync_herbalife(conn)
+
+
+@app.post("/api/connectors/social/sync")
+def social_sync(days: int = 14) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        return connectors.sync_social(conn, days=days)
+
+
+# ============================================================
+# Content inspiration (repost ideas from CEO / brand news)
+# ============================================================
+
+@app.get("/api/content/ceo-feed")
+def ceo_feed(limit: int = 5) -> Dict[str, Any]:
+    """Latest posts about the Herbalife CEO to inspire reposts."""
+    return connectors.fetch_ceo_posts(limit=limit)
+
+
+@app.post("/api/content/ideas")
+def content_ideas(req: ContentIdeaRequest) -> Dict[str, Any]:
+    ideas = ai_agent.content_ideas(req.topic, req.source_post, req.platforms, req.n)
+    return {"topic": req.topic, "ideas": ideas, "ai_enabled": ai_agent.ai_available()}
 
 
 # ============================================================

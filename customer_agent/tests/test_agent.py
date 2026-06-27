@@ -16,7 +16,7 @@ _tmp.close()
 os.environ["CRM_DB_PATH"] = _tmp.name
 
 from app import database as db          # noqa: E402
-from app import scoring, ai_agent       # noqa: E402
+from app import scoring, ai_agent, agent_ops, connectors  # noqa: E402
 from app.seed import seed, reset        # noqa: E402
 
 _passed = 0
@@ -126,11 +126,52 @@ def test_api_roundtrip():
     check("delete customer", c.get(f"/api/customers/{cid}").status_code == 404)
 
 
+def test_travel_detection():
+    check("travel detected", ai_agent.detect_travel("Back in town visiting family!") is True)
+    check("no travel", ai_agent.detect_travel("Loving my morning shake") is False)
+
+
+def test_risk_policy():
+    check("negative is sensitive", agent_ops.classify_risk("social", sentiment="negative") == "sensitive")
+    check("positive is low", agent_ops.classify_risk("social", sentiment="positive") == "low")
+    check("call is sensitive", agent_ops.classify_risk("call") == "sensitive")
+
+
+def test_content_ideas():
+    ideas = ai_agent.content_ideas("CEO keynote", "great speech", ["instagram"], 2)
+    check("content ideas count", len(ideas) >= 1)
+    check("content has caption", bool(ideas[0]["caption"]))
+
+
+def test_connectors_status():
+    s = connectors.status()
+    check("herbalife unconfigured by default", s["herbalife"]["configured"] is False)
+    check("herbalife uses browser automation", s["herbalife"]["method"] == "browser_automation")
+
+
+def test_plans_monitor_briefing():
+    db.init_db(); reset(); seed()
+    with db.get_conn() as conn:
+        mon = agent_ops.monitor(conn)
+        check("monitor reviewed posts", mon["reviewed"] >= 1)
+        check("monitor auto-replied to low-risk", mon["auto_replied"] >= 1)
+        check("monitor queued a sensitive reply", mon["queued"] >= 1)
+        tick = agent_ops.tick(conn)
+        check("tick processed due plan steps", tick["processed"] >= 1)
+        b = agent_ops.build_briefing(conn, days=7, run_agent=False)
+        check("briefing reports reviewed posts", b["stats"]["posts_reviewed"] >= 1)
+        check("briefing reports replied posts", b["stats"]["posts_replied"] >= 1)
+        check("briefing finds in-town customer", b["stats"]["in_town"] >= 1)
+        check("briefing has next steps", len(b["next_steps"]) >= 1)
+        check("briefing has narration", bool(b["narration"]))
+
+
 if __name__ == "__main__":
     print("Running customer-agent tests...\n")
     for fn in [test_sentiment, test_scoring_healthy, test_scoring_negative_triggers_call,
                test_scoring_stale_contact, test_fallback_outputs, test_seed_and_db,
-               test_api_roundtrip]:
+               test_api_roundtrip, test_travel_detection, test_risk_policy,
+               test_content_ideas, test_connectors_status, test_plans_monitor_briefing]:
         print(fn.__name__)
         fn()
     print(f"\n{_passed} passed, {_failed} failed")

@@ -93,6 +93,63 @@ CREATE TABLE IF NOT EXISTS reminders (
     FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
 );
 
+-- ============== Phase 2: autonomy, plans, agent actions ==============
+
+CREATE TABLE IF NOT EXISTS comm_plans (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,
+    description     TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS plan_steps (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id         INTEGER NOT NULL,
+    step_order      INTEGER NOT NULL DEFAULT 0,
+    day_offset      INTEGER NOT NULL DEFAULT 0,           -- days after enrollment
+    channel         TEXT NOT NULL DEFAULT 'text',         -- text|call|email|social
+    goal            TEXT NOT NULL DEFAULT '',             -- what this touch should achieve
+    risk            TEXT NOT NULL DEFAULT 'low',          -- low|sensitive
+    FOREIGN KEY (plan_id) REFERENCES comm_plans(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS enrollments (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id     INTEGER NOT NULL,
+    plan_id         INTEGER NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'active',        -- active|paused|completed
+    current_step    INTEGER NOT NULL DEFAULT 0,            -- index into plan_steps order
+    next_due        TEXT,
+    started_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE,
+    FOREIGN KEY (plan_id) REFERENCES comm_plans(id) ON DELETE CASCADE
+);
+
+-- Every autonomous thing the agent does is logged here (transparency + counts).
+CREATE TABLE IF NOT EXISTS agent_actions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id     INTEGER NOT NULL,
+    enrollment_id   INTEGER,
+    activity_id     INTEGER,                               -- source social post, if any
+    kind            TEXT NOT NULL DEFAULT 'reply',         -- review|reply|send|like|plan_step|monitor
+    platform        TEXT NOT NULL DEFAULT '',
+    channel         TEXT NOT NULL DEFAULT '',
+    summary         TEXT NOT NULL DEFAULT '',
+    draft           TEXT NOT NULL DEFAULT '',
+    risk            TEXT NOT NULL DEFAULT 'low',           -- low|sensitive
+    status          TEXT NOT NULL DEFAULT 'pending',       -- auto_done|pending|approved|rejected|sent
+    created_at      TEXT NOT NULL,
+    FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_plan_steps_plan      ON plan_steps(plan_id);
+CREATE INDEX IF NOT EXISTS idx_enrollments_customer ON enrollments(customer_id);
+CREATE INDEX IF NOT EXISTS idx_enrollments_status   ON enrollments(status);
+CREATE INDEX IF NOT EXISTS idx_actions_customer     ON agent_actions(customer_id);
+CREATE INDEX IF NOT EXISTS idx_actions_status       ON agent_actions(status);
+CREATE INDEX IF NOT EXISTS idx_actions_created      ON agent_actions(created_at);
+
 CREATE INDEX IF NOT EXISTS idx_progress_customer    ON progress(customer_id);
 CREATE INDEX IF NOT EXISTS idx_orders_customer      ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_activities_customer  ON activities(customer_id);

@@ -26,36 +26,74 @@
 
     <!-- ===== Nav ===== -->
     <nav class="tabs">
-      <button class="tab active" data-tab="dashboard">Dashboard</button>
+      <button class="tab active" data-tab="jarvis">🤖 Jarvis</button>
       <button class="tab" data-tab="customers">Customers</button>
+      <button class="tab" data-tab="approvals">Approvals <span id="apprCount" class="badge"></span></button>
       <button class="tab" data-tab="reminders">Reminders <span id="remCount" class="badge"></span></button>
+      <button class="tab" data-tab="content">Content</button>
       <button class="tab" data-tab="ask">Ask AI</button>
     </nav>
 
     <main>
-      <!-- ===== Dashboard ===== -->
-      <section id="tab-dashboard" class="tabpane active">
+      <!-- ===== Jarvis (home / morning briefing) ===== -->
+      <section id="tab-jarvis" class="tabpane active">
         <div class="card briefing-card">
           <div class="card-head">
-            <h2>🤖 Today's briefing</h2>
+            <h2>🤖 Your morning briefing</h2>
             <span id="briefingTime" class="muted"></span>
           </div>
           <div class="card-body">
-            <p id="briefingText" class="briefing-text">Run the daily catch-up to see who needs you today.</p>
+            <p id="briefingText" class="briefing-text">Tap <b>Play briefing</b> and I'll bring you up to speed.</p>
+            <div class="actions" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+              <button id="playBriefingBtn" class="btn btn-primary">🔊 Play briefing</button>
+              <button id="stopVoiceBtn" class="btn">⏹ Stop</button>
+              <button id="talkBtn" class="btn">🎤 Talk to Jarvis</button>
+              <span id="voiceStatus" class="muted"></span>
+            </div>
           </div>
         </div>
 
         <div id="statTiles" class="stat-tiles"></div>
 
+        <div class="card" id="inTownCard" style="display:none;">
+          <div class="card-head"><h2>📍 In town / traveling now</h2><span class="muted">From their social posts</span></div>
+          <div class="card-body"><div id="inTownList"></div></div>
+        </div>
+
         <div class="card">
           <div class="card-head">
-            <h2>🎯 Needs your attention</h2>
+            <h2>🎯 Personalized next steps</h2>
             <span class="muted">Ranked by urgency</span>
           </div>
           <div class="card-body">
             <div id="focusList" class="focus-list">
-              <p class="muted">No catch-up run yet. Click <b>Run daily catch-up</b> above.</p>
+              <p class="muted">Loading your briefing…</p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Approvals ===== -->
+      <section id="tab-approvals" class="tabpane">
+        <div class="toolbar">
+          <h2 style="margin:0;font-size:15px;">Waiting for your approval</h2>
+          <span class="muted">Low-risk replies are sent automatically. Sensitive ones land here.</span>
+        </div>
+        <div id="approvalList" class="reminder-list"></div>
+      </section>
+
+      <!-- ===== Content ===== -->
+      <section id="tab-content" class="tabpane">
+        <div class="card">
+          <div class="card-head"><h2>✨ Repost ideas (CEO & brand inspiration)</h2></div>
+          <div class="card-body">
+            <div id="ceoFeedNote" class="muted" style="margin-bottom:10px;"></div>
+            <label class="fld">Topic / what's trending</label>
+            <input id="contentTopic" class="input" style="width:100%;" value="The latest from the Herbalife CEO on healthy active living" />
+            <label class="fld">Paste a source post for inspiration (optional)</label>
+            <textarea id="contentSource" class="input" placeholder="Paste the CEO's post here…"></textarea>
+            <button id="genContentBtn" class="btn btn-primary" style="margin-top:12px;">Generate repost ideas</button>
+            <div id="contentIdeas" style="margin-top:14px;"></div>
           </div>
         </div>
       </section>

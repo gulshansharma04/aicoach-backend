@@ -64,85 +64,232 @@
     $("#tab-" + btn.dataset.tab).classList.add("active");
     if (btn.dataset.tab === "customers") loadCustomers();
     if (btn.dataset.tab === "reminders") loadReminders();
+    if (btn.dataset.tab === "approvals") loadApprovals();
+    if (btn.dataset.tab === "content") loadCeoFeed();
   }));
 
   // ===================================================================
-  // Dashboard / digest
+  // Jarvis morning briefing + voice
   // ===================================================================
-  $("#runDigestBtn").addEventListener("click", runDigest);
+  let lastNarration = "";
+  $("#runDigestBtn").addEventListener("click", () => loadBriefing(true));
+  $("#playBriefingBtn").addEventListener("click", () => speak(lastNarration || "No briefing yet."));
+  $("#stopVoiceBtn").addEventListener("click", stopSpeaking);
+  $("#talkBtn").addEventListener("click", startListening);
 
-  async function runDigest() {
+  async function loadBriefing(speakIt) {
     const btn = $("#runDigestBtn");
     btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Catching up…';
+    $("#focusList").innerHTML = '<span class="spinner"></span> Reviewing your customers…';
     try {
-      const d = await api("/api/agent/digest");
-      $("#briefingText").textContent = d.briefing;
+      const d = await api("/api/agent/briefing?days=7&run_agent=true");
+      lastNarration = d.narration;
+      $("#briefingText").textContent = d.narration;
       $("#briefingTime").textContent = "updated " + new Date().toLocaleTimeString();
-      renderTiles(d.totals);
-      renderFocus(d.focus);
-      if (d.totals.reminders_created) toast(`Filed ${d.totals.reminders_created} new reminder(s).`);
-      refreshReminderBadge();
+      renderTiles(d.stats);
+      renderInTown(d.in_town);
+      renderNextSteps(d.next_steps);
+      const ops = d.ops || {};
+      if (ops.monitor?.auto_replied || ops.tick?.auto_sent) {
+        toast(`Auto-handled ${(ops.monitor?.auto_replied||0)+(ops.tick?.auto_sent||0)} action(s).`);
+      }
+      refreshReminderBadge(); refreshApprovalBadge();
+      if (speakIt) speak(d.narration);
     } catch (e) {
-      toast("Catch-up failed: " + e.message);
+      $("#focusList").innerHTML = `<p class="muted">Couldn't load briefing: ${esc(e.message)}</p>`;
     } finally {
-      btn.disabled = false; btn.innerHTML = "⚡ Run daily catch-up";
+      btn.disabled = false; btn.innerHTML = "⚡ Refresh briefing";
     }
   }
 
-  function renderTiles(t) {
+  function renderTiles(s) {
     const tiles = [
-      { n: t.customers, l: "Customers", cls: "" },
-      { n: t.needs_attention, l: "Need attention", cls: "warn" },
-      { n: t.urgent, l: "Urgent", cls: "bad" },
-      { n: t.healthy, l: "Healthy", cls: "good" },
+      { n: s.new_customers, l: "New customers", cls: "good" },
+      { n: s.ordered_customers, l: `Ordered (${money(s.order_revenue)})`, cls: "good" },
+      { n: s.in_town, l: "In town / traveling", cls: "warn" },
+      { n: s.posts_replied + "/" + s.posts_reviewed, l: "Posts replied / reviewed", cls: "" },
+      { n: s.pending_approvals, l: "Awaiting approval", cls: s.pending_approvals ? "bad" : "" },
+      { n: s.total_customers, l: "Total customers", cls: "" },
     ];
     $("#statTiles").innerHTML = tiles.map(x =>
-      `<div class="tile ${x.cls}"><div class="n">${x.n}</div><div class="l">${x.l}</div></div>`).join("");
+      `<div class="tile ${x.cls}"><div class="n">${x.n}</div><div class="l">${esc(x.l)}</div></div>`).join("");
   }
 
-  function renderFocus(focus) {
+  function renderInTown(list) {
+    const card = $("#inTownCard");
+    if (!list || !list.length) { card.style.display = "none"; return; }
+    card.style.display = "";
+    $("#inTownList").innerHTML = list.map(c => `
+      <div class="focus-item" style="margin-bottom:8px;">
+        <div class="focus-top">
+          <span class="focus-name" data-id="${c.id}">${esc(c.name)}</span>
+          <span class="mini">${esc(c.platform)}</span>
+        </div>
+        <div class="reason">“${esc(c.post)}”</div>
+      </div>`).join("");
+    $$("#inTownList .focus-name").forEach(n => n.addEventListener("click", () => openCustomer(n.dataset.id)));
+  }
+
+  function renderNextSteps(steps) {
     const wrap = $("#focusList");
-    if (!focus.length) {
+    if (!steps || !steps.length) {
       wrap.innerHTML = `<p class="muted">🎉 All clear — no customers need urgent attention right now.</p>`;
       return;
     }
     wrap.innerHTML = "";
-    focus.forEach(f => {
-      const h = f.health;
+    steps.forEach(s => {
       const item = el(`
         <div class="focus-item">
           <div class="focus-top">
-            <div>
-              <span class="focus-name" data-id="${f.customer_id}">${esc(f.name)}</span>
-              <span class="urg ${h.suggested_urgency}">${h.suggested_urgency}</span>
-            </div>
-            <span class="health ${h.status}">${h.score}/100 · ${h.status.replace("_", " ")}</span>
+            <div><span class="focus-name" data-id="${s.id}">${esc(s.name)}</span>
+              <span class="urg ${s.urgency}">${s.urgency}</span></div>
+            <span class="health ${s.score >= 75 ? "healthy" : s.score >= 50 ? "nurture" : "at_risk"}">${s.score}/100</span>
           </div>
-          <div class="reason">${esc(h.support_reason)}</div>
-          <div class="draft-box"><b>✍️ Suggested ${esc(f.suggested_channel)}:</b>\n${esc(f.draft_message)}</div>
+          <div class="reason">${esc(s.action)}</div>
           <div class="focus-actions">
-            <button class="btn btn-xs btn-primary act-copy">Copy message</button>
-            <button class="btn btn-xs act-log" data-ch="${esc(f.suggested_channel)}">✓ Mark ${esc(f.suggested_channel)}ed</button>
+            <button class="btn btn-xs btn-primary act-draft">✍️ Draft ${esc(s.channel)}</button>
             <button class="btn btn-xs act-open">Open profile</button>
           </div>
+          <div class="draftHere"></div>
         </div>`);
-      item.querySelector(".focus-name").addEventListener("click", () => openCustomer(f.customer_id));
-      item.querySelector(".act-open").addEventListener("click", () => openCustomer(f.customer_id));
-      item.querySelector(".act-copy").addEventListener("click", () => {
-        navigator.clipboard?.writeText(f.draft_message); toast("Message copied.");
-      });
-      item.querySelector(".act-log").addEventListener("click", async (e) => {
-        const ch = e.target.dataset.ch === "call" ? "call" : "text";
-        await api(`/api/customers/${f.customer_id}/interactions`, {
-          method: "POST",
-          body: JSON.stringify({ channel: ch, summary: `Reached out (${ch}) re: ${h.support_reason}` }),
-        });
-        toast(`Logged ${ch} with ${f.name}.`);
-        item.style.opacity = ".5";
-        e.target.disabled = true;
+      item.querySelector(".focus-name").addEventListener("click", () => openCustomer(s.id));
+      item.querySelector(".act-open").addEventListener("click", () => openCustomer(s.id));
+      item.querySelector(".act-draft").addEventListener("click", async (e) => {
+        const box = item.querySelector(".draftHere");
+        box.innerHTML = '<span class="spinner"></span>';
+        try {
+          const d = await api(`/api/customers/${s.id}/draft`, {
+            method: "POST", body: JSON.stringify({ channel: s.channel, goal: s.action }),
+          });
+          box.innerHTML = `<div class="draft-box" style="margin-top:8px;"><b>✍️ ${esc(d.channel)}:</b>\n${esc(d.message)}</div>
+            <button class="btn btn-xs btn-primary copyD" style="margin-top:6px;">Copy</button>`;
+          box.querySelector(".copyD").addEventListener("click", () => { navigator.clipboard?.writeText(d.message); toast("Copied."); });
+        } catch (err) { box.textContent = "Error: " + err.message; }
       });
       wrap.appendChild(item);
     });
+  }
+
+  // ---------- Voice (Web Speech API) ----------
+  function speak(text) {
+    if (!("speechSynthesis" in window)) { toast("Voice not supported on this browser."); return; }
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1.02; u.pitch = 1.0;
+    $("#voiceStatus").textContent = "🔊 speaking…";
+    u.onend = () => { $("#voiceStatus").textContent = ""; };
+    window.speechSynthesis.speak(u);
+  }
+  function stopSpeaking() { window.speechSynthesis?.cancel(); $("#voiceStatus").textContent = ""; }
+
+  function startListening() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { toast("Speech recognition not supported here. Try Chrome."); return; }
+    const rec = new SR();
+    rec.lang = "en-US"; rec.interimResults = false; rec.maxAlternatives = 1;
+    $("#voiceStatus").textContent = "🎤 listening…";
+    rec.onresult = async (ev) => {
+      const text = ev.results[0][0].transcript;
+      $("#voiceStatus").textContent = "“" + text + "”";
+      try {
+        const d = await api("/api/agent/chat", { method: "POST", body: JSON.stringify({ message: text }) });
+        $("#briefingText").textContent = d.answer;
+        speak(d.answer);
+      } catch (e) { toast("Error: " + e.message); }
+    };
+    rec.onerror = () => { $("#voiceStatus").textContent = "Couldn't hear that."; };
+    rec.onend = () => { if ($("#voiceStatus").textContent === "🎤 listening…") $("#voiceStatus").textContent = ""; };
+    rec.start();
+  }
+
+  // ===================================================================
+  // Approvals (sensitive agent actions)
+  // ===================================================================
+  async function loadApprovals() {
+    const wrap = $("#approvalList");
+    wrap.innerHTML = '<span class="spinner"></span>';
+    try {
+      const d = await api("/api/agent/actions?status=pending");
+      if (!d.count) { wrap.innerHTML = `<p class="muted">Nothing waiting — the agent has handled everything low-risk on its own. ✅</p>`; return; }
+      wrap.innerHTML = "";
+      d.actions.forEach(a => {
+        const item = el(`
+          <div class="rem-item">
+            <div class="rem-top">
+              <div><span class="urg ${a.risk === "sensitive" ? "high" : "low"}">${esc(a.risk)}</span>
+                <b style="margin-left:6px;cursor:pointer;" class="a-name">${esc(a.customer_name)}</b>
+                <span class="muted"> · ${esc(a.kind)}${a.platform ? " · " + esc(a.platform) : ""}${a.channel ? " · " + esc(a.channel) : ""}</span></div>
+            </div>
+            <div class="reason">${esc(a.summary)}</div>
+            <textarea class="input a-draft">${esc(a.draft)}</textarea>
+            <div class="focus-actions">
+              <button class="btn btn-xs btn-good a-approve">✓ Approve & send</button>
+              <button class="btn btn-xs btn-danger a-reject">Reject</button>
+            </div>
+          </div>`);
+        item.querySelector(".a-name").addEventListener("click", () => openCustomer(a.customer_id));
+        item.querySelector(".a-approve").addEventListener("click", () =>
+          decideAction(a.id, "approve", item.querySelector(".a-draft").value));
+        item.querySelector(".a-reject").addEventListener("click", () => decideAction(a.id, "reject"));
+        wrap.appendChild(item);
+      });
+    } catch (e) { wrap.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
+  }
+
+  async function decideAction(id, decision, edited) {
+    try {
+      await api(`/api/agent/actions/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ decision, edited_draft: edited ?? null }),
+      });
+      toast(decision === "approve" ? "Approved & sent." : "Rejected.");
+      loadApprovals(); refreshApprovalBadge();
+    } catch (e) { toast("Error: " + e.message); }
+  }
+
+  async function refreshApprovalBadge() {
+    try {
+      const d = await api("/api/agent/actions?status=pending");
+      $("#apprCount").textContent = d.count ? d.count : "";
+    } catch (e) {}
+  }
+
+  // ===================================================================
+  // Content ideas (CEO repost inspiration)
+  // ===================================================================
+  $("#genContentBtn").addEventListener("click", generateContent);
+
+  async function loadCeoFeed() {
+    try {
+      const d = await api("/api/content/ceo-feed");
+      $("#ceoFeedNote").textContent = d.configured
+        ? `Pulling the latest posts about the CEO (${(d.posts || []).length} found).`
+        : d.message;
+    } catch (e) {}
+  }
+
+  async function generateContent() {
+    const btn = $("#genContentBtn");
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Writing…';
+    const out = $("#contentIdeas");
+    try {
+      const d = await api("/api/content/ideas", {
+        method: "POST",
+        body: JSON.stringify({ topic: $("#contentTopic").value, source_post: $("#contentSource").value }),
+      });
+      out.innerHTML = d.ideas.map(i => `
+        <div class="focus-item" style="margin-bottom:10px;">
+          <div class="focus-top"><span class="mini">${esc(i.platform)}</span></div>
+          <div style="white-space:pre-wrap;font-size:13px;line-height:1.55;">${esc(i.caption)}</div>
+          <div class="muted">${esc(i.hashtags)}</div>
+          <div class="focus-actions"><button class="btn btn-xs btn-primary copyIdea">Copy</button></div>
+        </div>`).join("");
+      $$(".copyIdea", out).forEach((b, idx) => b.addEventListener("click", () => {
+        const i = d.ideas[idx];
+        navigator.clipboard?.writeText(i.caption + "\n\n" + i.hashtags); toast("Copied.");
+      }));
+    } catch (e) { out.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
+    finally { btn.disabled = false; btn.innerHTML = "Generate repost ideas"; }
   }
 
   // ===================================================================
@@ -283,6 +430,8 @@
       section("Social activity & comments", acts, addBtn("Activity", "activity")) +
       section("Progress", prog, addBtn("Milestone", "progress")) +
       section("Catch-up log", inter, addBtn("Log", "interaction")) +
+      section("Communication plans", '<div id="plansSection"><span class="spinner"></span></div>',
+              `<button class="btn btn-xs" id="enrollBtn">+ Enroll</button>`) +
       `<button class="btn btn-danger btn-xs" id="delCust" style="margin-top:6px;">Delete customer</button>`;
 
     // wire section actions
@@ -296,6 +445,39 @@
     });
     $$("[data-add]", $("#drawerBody")).forEach(b =>
       b.addEventListener("click", () => openSubForm(c.id, b.dataset.add)));
+    $("#enrollBtn").addEventListener("click", () => openEnroll(c.id));
+    loadPlansSection(c.id);
+  }
+
+  async function loadPlansSection(customerId) {
+    const box = $("#plansSection");
+    if (!box) return;
+    try {
+      const d = await api(`/api/customers/${customerId}/enrollments`);
+      if (!d.enrollments.length) { box.innerHTML = `<p class="muted">Not enrolled in any plan yet.</p>`; return; }
+      box.innerHTML = d.enrollments.map(e => `
+        <div class="kv"><span>${esc(e.plan_name)}</span>
+          <b>${esc(e.status)} · step ${e.current_step + 1}${e.next_due ? " · next " + fmtDate(e.next_due) : ""}</b></div>`).join("");
+    } catch (e) { box.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
+  }
+
+  async function openEnroll(customerId) {
+    let plans = [];
+    try { plans = (await api("/api/plans")).plans; } catch (e) { toast("Couldn't load plans."); return; }
+    if (!plans.length) { toast("No plans defined yet."); return; }
+    openModal("Enroll in a communication plan", `
+      <label class="fld">Plan</label>
+      <select class="input" id="planSel" style="width:100%;">
+        ${plans.map(p => `<option value="${p.id}">${esc(p.name)} (${p.steps.length} steps)</option>`).join("")}
+      </select>
+      <div class="muted" style="margin-top:8px;">${esc(plans[0].description || "")}</div>
+      <button class="btn btn-primary" id="doEnroll" style="margin-top:12px;width:100%;">Enroll</button>`);
+    $("#doEnroll").addEventListener("click", async () => {
+      try {
+        await api("/api/enrollments", { method: "POST", body: JSON.stringify({ customer_id: customerId, plan_id: parseInt($("#planSel").value, 10) }) });
+        toast("Enrolled."); closeModal(); openCustomer(customerId);
+      } catch (e) { toast("Error: " + e.message); }
+    });
   }
 
   async function loadTips(id) {
@@ -554,7 +736,8 @@
     }
     loadCustomers();
     refreshReminderBadge();
-    runDigest();
+    refreshApprovalBadge();
+    loadBriefing(false);
   }
   init();
 })();

@@ -102,3 +102,35 @@ class ChatRequest(BaseModel):
 class DraftRequest(BaseModel):
     channel: Optional[str] = None  # call|text; defaults to customer preference
     goal: str = "check in and offer support"
+
+
+# ----------------------------- Plans / autonomy -----------------------------
+
+class PlanStepIn(BaseModel):
+    day_offset: int = 0
+    channel: str = "text"
+    goal: str = ""
+    risk: str = "low"  # low|sensitive
+
+
+class PlanCreate(BaseModel):
+    name: str
+    description: str = ""
+    steps: List[PlanStepIn] = Field(default_factory=list)
+
+
+class EnrollRequest(BaseModel):
+    customer_id: int
+    plan_id: int
+
+
+class ActionDecision(BaseModel):
+    decision: str  # approve|reject
+    edited_draft: Optional[str] = None
+
+
+class ContentIdeaRequest(BaseModel):
+    topic: str = "the latest from the Herbalife CEO"
+    source_post: str = ""
+    platforms: List[str] = Field(default_factory=lambda: ["instagram", "facebook"])
+    n: int = 3

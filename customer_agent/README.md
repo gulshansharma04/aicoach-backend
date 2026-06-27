@@ -25,6 +25,38 @@ natural-language tips, messages, and daily briefings.
 | **Frequent catch-ups** | One-click **daily catch-up** ranks who needs you today and logs your outreach. |
 | **Support detection → reminders** | Health scoring detects at-risk customers, negative sentiment, unanswered comments and stale relationships, then files **call/text reminders** with a drafted message. |
 | **Ask AI** | Chat over your whole portfolio: "Who should I call today?", "Draft a reorder text for James." |
+| **🤖 Morning briefing + voice** | Open the app and Jarvis reads you a spoken + text rundown: new customers, who ordered, who's *in town* (from social), how many posts it reviewed/replied, and your personalized next steps. Talk back with the mic. |
+| **Communication plans** | Multi-step nurture cadences (e.g. welcome → day‑3 tip → day‑10 call → day‑21 reorder). The scheduler advances due steps automatically. |
+| **Autonomous social monitor** | Reviews recent posts/comments, drafts replies, and applies the autonomy policy. |
+| **Content inspiration** | Turns the latest Herbalife CEO / brand news into ready-to-publish repost drafts in the distributor's own voice. |
+
+### Autonomy policy — *auto-handle low-risk only*
+
+- **Low-risk** (reply to a positive/neutral post, a routine plan touch) → the agent
+  **does it automatically** and logs it.
+- **Sensitive** (negative sentiment, a phone call, anything flagged) → the agent
+  **drafts it and queues it for your approval** (Approvals tab), plus files a reminder.
+
+Every autonomous action is written to `agent_actions` for full transparency — that's
+how the briefing can tell you "I reviewed 6 posts and replied to 5."
+
+### How this maps to the autonomous "Jarvis on remote infra" vision
+
+| Vision | In this codebase |
+|---|---|
+| Always-on agent on remote infra | `POST /api/agent/tick` + `/api/agent/monitor` — call from cron/a worker |
+| Talk to it on your phone | Voice briefing + mic (Web Speech API) in the Jarvis tab; PWA-ready |
+| Pull customers from Herbalife | `connectors.HerbalifeConnector` (browser automation, credential-gated) |
+| Map customers → social, monitor & respond | `socials` field + `agent_ops.monitor()` + Meta connector seam |
+| Communication plan | `comm_plans` / `enrollments` + scheduler `tick()` |
+| Repost from CEO news | `connectors.fetch_ceo_posts()` + `ai_agent.content_ideas()` |
+
+> **Security note (important):** credentials for Herbalife / social platforms are
+> **never stored in the app database or source**. Connectors read them at runtime
+> from environment variables (in production, a secrets manager) — see
+> `app/connectors.py`. Automating a third-party portal may conflict with its
+> Terms of Service and should only be run against the distributor's own account,
+> with consent. Outbound replies default to **approve-first for anything sensitive**.
 
 ### The "brain": health scoring (deterministic & explainable)
 
@@ -92,6 +124,17 @@ docker run -p 8000:8000 \
 | GET | `/api/customers/{id}/tips` | Personalized tips |
 | POST | `/api/customers/{id}/draft` | Draft a call script / text |
 | GET | `/api/agent/digest` | **Daily catch-up**: ranked focus list, briefing, auto-reminders |
+| GET | `/api/agent/briefing` | **Morning briefing**: rundown + voice narration (runs monitor+tick) |
+| POST | `/api/agent/monitor` | Review social activity, auto-reply low-risk, queue sensitive |
+| POST | `/api/agent/tick` | Advance due communication-plan steps (cron/worker) |
+| GET/PATCH | `/api/agent/actions` | List / approve / reject queued agent actions |
+| GET/POST | `/api/plans` | List / create communication plans |
+| POST | `/api/enrollments` | Enroll a customer in a plan |
+| GET | `/api/content/ceo-feed` | Latest CEO posts (inspiration source) |
+| POST | `/api/content/ideas` | Generate repost drafts from a topic/source |
+| GET | `/api/connectors` | Connector configuration status |
+| POST | `/api/connectors/herbalife/sync` | Import customers/orders (browser automation) |
+| POST | `/api/connectors/social/sync` | Pull social activity (Meta Graph API) |
 | POST | `/api/agent/chat` | Conversational agent over your portfolio |
 | GET | `/api/reminders` | Reminders (filter by status) |
 | POST | `/api/customers/{id}/reminders` | Create reminder |
