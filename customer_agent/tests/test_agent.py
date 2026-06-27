@@ -293,6 +293,24 @@ def test_qualify_api_and_import_dm():
     check("customer qualify returns priority", qc["priority"] in ("hot", "warm", "cold"))
 
 
+def test_hot_lead_auto_enroll():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    db.init_db(); reset()
+    c = TestClient(app)
+    imp = c.post("/api/leads/import", json={"platform": "instagram", "leads": [
+        {"name": "Hot Lead", "handle": "@hot", "priority": "hot", "opener": "Hi!"},
+        {"name": "Cold Lead", "handle": "@cold", "priority": "cold", "opener": "Hi!"},
+    ]}).json()
+    check("hot lead auto-enrolled", imp["auto_enrolled"] == 1)
+    hot_id = next(x["id"] for x in imp["created"] if x["handle"] == "@hot")
+    cold_id = next(x["id"] for x in imp["created"] if x["handle"] == "@cold")
+    he = c.get(f"/api/customers/{hot_id}/enrollments").json()["enrollments"]
+    check("hot lead in fast-follow plan", any("Fast Follow" in e["plan_name"] for e in he))
+    ce = c.get(f"/api/customers/{cold_id}/enrollments").json()["enrollments"]
+    check("cold lead not auto-enrolled", len(ce) == 0)
+
+
 if __name__ == "__main__":
     print("Running customer-agent tests...\n")
     for fn in [test_sentiment, test_scoring_healthy, test_scoring_negative_triggers_call,
@@ -302,7 +320,7 @@ if __name__ == "__main__":
                test_auth_and_consent_flow, test_consent_gates_monitor, test_secret_store,
                test_email_triage_and_website, test_notifications,
                test_extract_leads, test_lead_import_api,
-               test_qualify_lead, test_qualify_api_and_import_dm]:
+               test_qualify_lead, test_qualify_api_and_import_dm, test_hot_lead_auto_enroll]:
         print(fn.__name__)
         fn()
     print(f"\n{_passed} passed, {_failed} failed")

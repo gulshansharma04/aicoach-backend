@@ -142,6 +142,37 @@ def _plan_steps(conn, plan_id: int) -> List[Dict[str, Any]]:
         "SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY step_order", (plan_id,)))
 
 
+HOT_LEAD_PLAN_NAME = "Hot Lead Fast Follow-up"
+
+
+def ensure_hot_lead_plan(conn) -> int:
+    """Create (once) and return the canonical fast-follow plan for hot leads."""
+    row = conn.execute("SELECT id FROM comm_plans WHERE name = ?", (HOT_LEAD_PLAN_NAME,)).fetchone()
+    if row:
+        return row["id"]
+    return create_plan(
+        conn, HOT_LEAD_PLAN_NAME,
+        "Fast cadence to convert a hot inbound lead after the first DM.",
+        [
+            {"day_offset": 2, "channel": "text", "goal": "Friendly nudge — did you get a chance to see my message?", "risk": "low"},
+            {"day_offset": 5, "channel": "text", "goal": "Share a relevant success story and offer to help them get started", "risk": "low"},
+            {"day_offset": 9, "channel": "call", "goal": "Personal check-in call to answer questions and close", "risk": "sensitive"},
+        ],
+    )
+
+
+def enroll_in_hot_plan(conn, customer_id: int) -> bool:
+    """Idempotently enroll a hot lead in the fast-follow plan. Returns True if newly enrolled."""
+    pid = ensure_hot_lead_plan(conn)
+    existing = conn.execute(
+        "SELECT id FROM enrollments WHERE customer_id = ? AND plan_id = ? AND status = 'active'",
+        (customer_id, pid)).fetchone()
+    if existing:
+        return False
+    enroll(conn, customer_id, pid)
+    return True
+
+
 def enroll(conn, customer_id: int, plan_id: int) -> Dict[str, Any]:
     if not _customer(conn, customer_id):
         raise ValueError("Customer not found")

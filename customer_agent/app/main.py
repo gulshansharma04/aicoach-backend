@@ -251,10 +251,14 @@ def import_leads(req: LeadImportRequest) -> Dict[str, Any]:
                        (customer_id,kind,reason,draft_message,priority,status,due_date,source,created_at)
                        VALUES (?,?,?,?,?, 'open', ?, 'agent', ?)""",
                     (cid, "text", "Send first DM to new lead", opener, pr, now, now))
-            created.append({"id": cid, "name": name, "handle": handle, "priority": priority})
+            # Hot leads get auto-enrolled into the fast follow-up cadence.
+            enrolled = agent_ops.enroll_in_hot_plan(conn, cid) if priority == "hot" else False
+            created.append({"id": cid, "name": name, "handle": handle,
+                            "priority": priority, "auto_enrolled": enrolled})
 
-    return {"created": created, "created_count": len(created),
-            "skipped": skipped, "ai_enabled": ai_agent.ai_available()}
+    auto_enrolled = sum(1 for x in created if x.get("auto_enrolled"))
+    return {"created": created, "created_count": len(created), "skipped": skipped,
+            "auto_enrolled": auto_enrolled, "ai_enabled": ai_agent.ai_available()}
 
 
 _PRIORITY_RANK = {"hot": 0, "warm": 1, "cold": 2}
@@ -295,7 +299,9 @@ def qualify_customer(customer_id: int) -> Dict[str, Any]:
                    (customer_id,kind,reason,draft_message,priority,status,due_date,source,created_at)
                    VALUES (?,?,?,?,?, 'open', ?, 'agent', ?)""",
                 (customer_id, "text", "Send first DM to new lead", q["opener"], pr, iso_now(), iso_now()))
-    return {"customer_id": customer_id, **q, "ai_enabled": ai_agent.ai_available()}
+        auto_enrolled = agent_ops.enroll_in_hot_plan(conn, customer_id) if q["priority"] == "hot" else False
+    return {"customer_id": customer_id, **q, "auto_enrolled": auto_enrolled,
+            "ai_enabled": ai_agent.ai_available()}
 
 
 # ============================================================
