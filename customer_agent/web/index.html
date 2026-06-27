@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Distributor CRM — AI Customer Agent</title>
   <link rel="stylesheet" href="./styles.css" />
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="theme-color" content="#6ea8ff" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Distributor Buddy" />
 </head>
 <body>
   <div class="app">
@@ -20,6 +25,7 @@
       </div>
       <div class="topbar-right">
         <span id="aiBadge" class="chip"><span class="dot"></span> checking…</span>
+        <button id="bellBtn" class="btn" title="Notifications">🔔 <span id="bellCount" class="badge"></span></button>
         <button id="runDigestBtn" class="btn btn-primary">⚡ Run daily catch-up</button>
       </div>
     </header>
@@ -48,6 +54,7 @@
               <button id="playBriefingBtn" class="btn btn-primary">🔊 Play briefing</button>
               <button id="stopVoiceBtn" class="btn">⏹ Stop</button>
               <button id="talkBtn" class="btn">🎤 Talk to Jarvis</button>
+              <button id="scanEmailBtn" class="btn">📧 Check my inbox</button>
               <span id="voiceStatus" class="muted"></span>
             </div>
           </div>
@@ -94,6 +101,18 @@
             <textarea id="contentSource" class="input" placeholder="Paste the CEO's post here…"></textarea>
             <button id="genContentBtn" class="btn btn-primary" style="margin-top:12px;">Generate repost ideas</button>
             <div id="contentIdeas" style="margin-top:14px;"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>🌐 Build a product website</h2><span class="muted">via Google Stitch</span></div>
+          <div class="card-body">
+            <label class="fld">Product / brand</label>
+            <input id="siteProduct" class="input" style="width:100%;" placeholder="e.g. Pro2col" />
+            <label class="fld">Goal (optional)</label>
+            <input id="siteGoal" class="input" style="width:100%;" placeholder="introduce the product and capture leads" />
+            <button id="genSiteBtn" class="btn btn-primary" style="margin-top:12px;">Generate website plan</button>
+            <div id="siteResult" style="margin-top:14px;"></div>
           </div>
         </div>
       </section>

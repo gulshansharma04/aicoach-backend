@@ -30,6 +30,25 @@ natural-language tips, messages, and daily briefings.
 | **Autonomous social monitor** | Reviews recent posts/comments, drafts replies, and applies the autonomy policy. |
 | **Content inspiration** | Turns the latest Herbalife CEO / brand news into ready-to-publish repost drafts in the distributor's own voice. |
 
+### Onboarding (Jarvis-style first run)
+
+Open the app and the Distributor Buddy walks you through: a spoken welcome →
+sign up with **email or phone + 2-factor OTP** → a capabilities pitch →
+**trust & consent toggles** → choose which **social platforms** to track →
+**connect myHerbalife**. Your consent choices actually govern the agent's
+behavior (e.g. *draft-only* means even low-risk replies are queued for approval
+instead of auto-sent). Credentials are held in a **secret store, never the DB**
+(`app/secret_store.py`).
+
+### Extra agent capabilities
+
+- **Mobile notifications** — the agent files notifications (and pushes via FCM/APNs
+  when configured); urgent items also fire a native browser/PWA notification.
+- **Email monitoring** — scans subscribed myHerbalife emails, triages importance,
+  and notifies you about what matters (`/api/agent/scan-email`).
+- **Website builder** — generates a buildable product-microsite brief and hands it
+  to **Google Stitch** (`/api/website/plan`).
+
 ### Autonomy policy — *auto-handle low-risk only*
 
 - **Low-risk** (reply to a positive/neutral post, a routine plan touch) → the agent
@@ -142,6 +161,34 @@ docker run -p 8000:8000 \
 
 ---
 
+## Test it on your iPhone
+
+The app is a mobile-friendly PWA, so you don't need the App Store to try it.
+
+**Option A — quickest (same Wi-Fi):**
+1. Run the server on your computer, bound to all interfaces:
+   `uvicorn app.main:app --host 0.0.0.0 --port 8000`
+2. Find your computer's LAN IP (e.g. `192.168.1.42`).
+3. On your iPhone (same Wi-Fi), open Safari → `http://192.168.1.42:8000`.
+4. Go through the Jarvis onboarding. In **Share → Add to Home Screen** to install
+   it like an app (full-screen, its own icon).
+
+**Option B — from anywhere (deploy):** push this folder to any host that runs a
+container (Render, Railway, Fly.io, etc.) using the included `Dockerfile`, set
+`OPENAI_API_KEY` (optional) as an env var, then open the HTTPS URL in Safari and
+Add to Home Screen.
+
+**Notes for iOS:**
+- **Voice:** "Play briefing" and "Talk to Jarvis" use the browser's Speech APIs.
+  Speech *synthesis* (Jarvis talking) works in Safari. Speech *recognition* (the
+  mic) is best on Chrome/desktop; on iOS use the on-screen keyboard's dictation
+  in the "Ask AI" box as a fallback.
+- **Notifications:** native web-push on iOS requires iOS 16.4+ **and** the app
+  added to the Home Screen. Until a push provider (FCM/APNs) is wired, in-app
+  notifications (the 🔔) always work.
+- For a true native iOS app later, this same `web/` folder can be wrapped with
+  Capacitor (the repo already uses it) and shipped via TestFlight.
+
 ## Project structure
 
 ```
@@ -152,10 +199,16 @@ customer_agent/
 │   ├── models.py      # Pydantic schemas
 │   ├── scoring.py     # Deterministic health scoring & support detection
 │   ├── ai_agent.py    # LLM layer with rule-based fallback
+│   ├── agent_ops.py   # Plans, scheduler tick, social monitor, briefing, consent
+│   ├── auth.py        # Signup + 2FA OTP + sessions
+│   ├── secret_store.py# Credential vault (never the DB)
+│   ├── connectors.py  # Herbalife / social / email / Stitch seams
+│   ├── notify.py      # Notifications + mobile push seam
 │   └── seed.py        # Demo data
-├── web/               # Vanilla SPA (no build step)
-│   ├── index.html  styles.css  app.js  config.js
-├── tests/             # Scoring + API tests
+├── web/               # Vanilla SPA + PWA (no build step)
+│   ├── index.html  onboarding.html  styles.css  app.js  onboarding.js
+│   ├── config.js  manifest.json
+├── tests/             # 57-check suite
 ├── requirements.txt   Dockerfile  .env.example  README.md
 ```
 

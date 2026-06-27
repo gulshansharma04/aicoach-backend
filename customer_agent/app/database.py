@@ -143,6 +143,58 @@ CREATE TABLE IF NOT EXISTS agent_actions (
     FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE CASCADE
 );
 
+-- ============== Phase 3: distributor onboarding, auth, consent ==============
+
+CREATE TABLE IF NOT EXISTS distributors (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                TEXT NOT NULL DEFAULT '',
+    email               TEXT,
+    phone               TEXT,
+    verified            INTEGER NOT NULL DEFAULT 0,
+    onboarded           INTEGER NOT NULL DEFAULT 0,
+    consent             TEXT NOT NULL DEFAULT '{}',        -- json consent matrix
+    tracked_platforms   TEXT NOT NULL DEFAULT '[]',        -- json array
+    herbalife_connected INTEGER NOT NULL DEFAULT 0,
+    herbalife_connected_at TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS otp_codes (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    distributor_id  INTEGER NOT NULL,
+    code_hash       TEXT NOT NULL,
+    purpose         TEXT NOT NULL DEFAULT 'verify',
+    expires_at      TEXT NOT NULL,
+    used            INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL,
+    FOREIGN KEY (distributor_id) REFERENCES distributors(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token           TEXT PRIMARY KEY,
+    distributor_id  INTEGER NOT NULL,
+    created_at      TEXT NOT NULL,
+    FOREIGN KEY (distributor_id) REFERENCES distributors(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    distributor_id  INTEGER,
+    title           TEXT NOT NULL,
+    body            TEXT NOT NULL DEFAULT '',
+    level           TEXT NOT NULL DEFAULT 'info',          -- info|important|urgent
+    source          TEXT NOT NULL DEFAULT 'agent',         -- agent|email|monitor|plan
+    link            TEXT NOT NULL DEFAULT '',
+    read            INTEGER NOT NULL DEFAULT 0,
+    pushed          INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_read   ON notifications(read);
+CREATE INDEX IF NOT EXISTS idx_otp_distributor      ON otp_codes(distributor_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_distributor ON sessions(distributor_id);
+
 CREATE INDEX IF NOT EXISTS idx_plan_steps_plan      ON plan_steps(plan_id);
 CREATE INDEX IF NOT EXISTS idx_enrollments_customer ON enrollments(customer_id);
 CREATE INDEX IF NOT EXISTS idx_enrollments_status   ON enrollments(status);
@@ -159,7 +211,7 @@ CREATE INDEX IF NOT EXISTS idx_reminders_status     ON reminders(status);
 """
 
 # Columns stored as JSON strings and transparently (de)serialized.
-_JSON_COLUMNS = {"tags", "socials"}
+_JSON_COLUMNS = {"tags", "socials", "consent", "tracked_platforms"}
 
 
 def _connect() -> sqlite3.Connection:

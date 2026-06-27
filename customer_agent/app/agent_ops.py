@@ -19,7 +19,7 @@ from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from . import database as db
-from . import ai_agent, scoring
+from . import ai_agent, scoring, notify
 from .scoring import iso_now, now_utc, days_since
 
 
@@ -27,6 +27,31 @@ def _within(ts: Optional[str], window_days: int) -> bool:
     """True if ``ts`` is within the last ``window_days`` (handles 'today' = 0 correctly)."""
     d = days_since(ts)
     return d is not None and d <= window_days
+
+
+# Default consent when no distributor has onboarded yet (legacy/back-compat:
+# behave autonomously). The onboarding wizard writes the user's real choices,
+# which default to the safer 'draft' (approve-first) for posting.
+CONSENT_DEFAULTS: Dict[str, Any] = {
+    "manage_customers": True,
+    "auto_followups": True,        # auto-send low-risk plan touches
+    "find_social": True,
+    "social_posting": "auto",      # auto | draft | off  (reply to social posts)
+    "ceo_content": "auto",         # auto | draft | off  (repost CEO inspiration)
+}
+
+
+def get_active_consent(conn) -> Dict[str, Any]:
+    """Return the onboarded distributor's consent, merged over defaults."""
+    row = conn.execute(
+        "SELECT consent FROM distributors WHERE onboarded=1 ORDER BY updated_at DESC LIMIT 1"
+    ).fetchone()
+    consent = dict(CONSENT_DEFAULTS)
+    if row:
+        stored = db.row_to_dict(row).get("consent") or {}
+        if isinstance(stored, dict):
+            consent.update({k: v for k, v in stored.items() if v is not None})
+    return consent
 
 
 # ============================================================
@@ -150,6 +175,9 @@ def _advance_enrollment(conn, enr: Dict[str, Any], steps: List[Dict[str, Any]]) 
 
 def tick(conn) -> Dict[str, Any]:
     """Process every due plan step. Safe to call repeatedly (idempotent per due-time)."""
+    consent = get_active_consent(conn)
+    allow_auto = bool(consent.get("auto_followups", True))
+
     now = iso_now()
     due = db.rows_to_list(conn.execute(
         "SELECT * FROM enrollments WHERE status='active' AND next_due IS NOT NULL AND next_due <= ?",
@@ -171,7 +199,7 @@ def tick(conn) -> Dict[str, Any]:
         draft = ai_agent.draft_message(cust, health, step["channel"], step["goal"] or "stay in touch")
         risk = classify_risk(step["channel"], explicit=step.get("risk"))
 
-        if risk == "low":
+        if risk == "low" and allow_auto:
             status = "sent"
             out["auto_sent"] += 1
             # auto-sent touches are logged as a completed interaction
@@ -203,12 +231,15 @@ def monitor(conn, days: int = 14) -> Dict[str, Any]:
     apply the autonomy policy. Idempotent: an activity is only processed once
     (tracked via agent_actions.activity_id).
     """
+    consent = get_active_consent(conn)
+    posting = consent.get("social_posting", "auto")  # auto | draft | off
+
     seen = {r["activity_id"] for r in db.rows_to_list(conn.execute(
         "SELECT DISTINCT activity_id FROM agent_actions WHERE activity_id IS NOT NULL"))}
 
     acts = db.rows_to_list(conn.execute(
         "SELECT * FROM activities ORDER BY occurred_at DESC"))
-    out = {"reviewed": 0, "auto_replied": 0, "queued": 0}
+    out = {"reviewed": 0, "auto_replied": 0, "queued": 0, "skipped": 0}
 
     for a in acts:
         if a["id"] in seen:
@@ -228,20 +259,32 @@ def monitor(conn, days: int = 14) -> Dict[str, Any]:
                     platform=a["platform"], summary=f"Reviewed {a['kind']}: {a['content'][:80]}",
                     risk="low", status="auto_done")
 
+        # Respect the distributor's posting consent.
+        if posting == "off":
+            out["skipped"] += 1
+            continue
+
         reply = ai_agent.draft_reply(cust, a)
         risk = classify_risk("social", sentiment=a.get("sentiment"))
 
-        if risk == "low":
+        if risk == "low" and posting == "auto":
             status = "sent"
             out["auto_replied"] += 1
             # mark the original comment as handled
             conn.execute("UPDATE activities SET needs_response=0 WHERE id=?", (a["id"],))
-        else:
+        elif risk == "low":  # posting == 'draft' -> queue for approval
+            status = "pending"
+            out["queued"] += 1
+        else:  # negative / sensitive -> always require approval + reminder
             status = "pending"
             out["queued"] += 1
             _ensure_reminder(conn, cust["id"],
                              f"Negative {a['platform']} post needs a personal reply",
                              reply, "call", "urgent")
+            notify.notify(
+                conn, f"⚠ {cust['name']} needs a personal touch",
+                f"Negative {a['platform']} post — I drafted a reply for your approval.",
+                level="urgent", source="monitor", link=f"#approvals")
 
         _log_action(conn, customer_id=cust["id"], activity_id=a["id"], kind="reply",
                     platform=a["platform"], channel="social", summary=a["content"][:80],

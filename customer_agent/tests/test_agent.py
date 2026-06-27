@@ -166,12 +166,79 @@ def test_plans_monitor_briefing():
         check("briefing has narration", bool(b["narration"]))
 
 
+def test_auth_and_consent_flow():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app)
+    su = c.post("/api/auth/signup", json={"name": "Alex", "email": "alex@example.com"}).json()
+    check("signup returns dev otp", "dev_otp" in su)
+    bad = c.post("/api/auth/verify", json={"distributor_id": su["distributor_id"], "code": "000000"})
+    check("wrong otp rejected", bad.status_code == 400)
+    ok = c.post("/api/auth/verify", json={"distributor_id": su["distributor_id"], "code": su["dev_otp"]}).json()
+    check("verify returns token", bool(ok.get("token")))
+    token = ok["token"]
+    hdr = {"X-Distributor-Token": token}
+    check("me unauthorized without token", c.get("/api/me").status_code == 401)
+    me = c.get("/api/me", headers=hdr).json()
+    check("me authorized with token", me["id"] == su["distributor_id"])
+    upd = c.patch("/api/me/consent", headers=hdr,
+                  json={"consent": {"social_posting": "draft"}, "onboarded": True}).json()
+    check("consent saved", upd["consent"]["social_posting"] == "draft")
+    check("onboarded flag set", upd["onboarded"] is True)
+
+
+def test_consent_gates_monitor():
+    import json as _json
+    db.init_db(); reset(); seed()
+    with db.get_conn() as conn:
+        # Onboard a distributor with draft-only posting.
+        conn.execute(
+            "INSERT INTO distributors (name,consent,onboarded,created_at,updated_at) VALUES (?,?,1,?,?)",
+            ("Draft User", _json.dumps({"social_posting": "draft"}), scoring.iso_now(), scoring.iso_now()))
+    with db.get_conn() as conn:
+        mon = agent_ops.monitor(conn)
+        check("draft mode auto-replies nothing", mon["auto_replied"] == 0)
+        check("draft mode queues replies", mon["queued"] >= 1)
+
+
+def test_secret_store():
+    from app import secret_store
+    check("no creds initially", secret_store.has_credentials(999, "herbalife") is False)
+    secret_store.store_credentials(999, "herbalife", {"username": "u", "password": "p"})
+    check("creds stored", secret_store.has_credentials(999, "herbalife") is True)
+    secret_store.revoke_credentials(999, "herbalife")
+    check("creds revoked", secret_store.has_credentials(999, "herbalife") is False)
+
+
+def test_email_triage_and_website():
+    t = ai_agent.triage_email("Action required: your order shipped", "Tracking inside")
+    check("important email flagged", t["important"] is True)
+    t2 = ai_agent.triage_email("hello", "just saying hi")
+    check("routine email not flagged", t2["important"] is False)
+    plan = ai_agent.website_plan("Pro2col", "introduce the product")
+    check("website plan has sections", len(plan.get("sections", [])) >= 1)
+
+
+def test_notifications():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    db.init_db(); reset(); seed()
+    with db.get_conn() as conn:
+        from app import notify
+        notify.notify(conn, "Test", "body", level="urgent")
+    c = TestClient(app)
+    n = c.get("/api/notifications").json()
+    check("notification listed", n["unread"] >= 1)
+
+
 if __name__ == "__main__":
     print("Running customer-agent tests...\n")
     for fn in [test_sentiment, test_scoring_healthy, test_scoring_negative_triggers_call,
                test_scoring_stale_contact, test_fallback_outputs, test_seed_and_db,
                test_api_roundtrip, test_travel_detection, test_risk_policy,
-               test_content_ideas, test_connectors_status, test_plans_monitor_briefing]:
+               test_content_ideas, test_connectors_status, test_plans_monitor_briefing,
+               test_auth_and_consent_flow, test_consent_gates_monitor, test_secret_store,
+               test_email_triage_and_website, test_notifications]:
         print(fn.__name__)
         fn()
     print(f"\n{_passed} passed, {_failed} failed")

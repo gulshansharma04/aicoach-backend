@@ -13,20 +13,41 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import database as db
 from . import ai_agent, scoring, agent_ops
-from . import connectors
+from . import connectors, auth, secret_store, notify
 from .scoring import iso_now
 from .models import (
     CustomerCreate, CustomerUpdate, ProgressCreate, OrderCreate, ActivityCreate,
     InteractionCreate, ReminderCreate, ReminderUpdate, ChatRequest, DraftRequest,
     PlanCreate, EnrollRequest, ActionDecision, ContentIdeaRequest,
+    SignupRequest, VerifyRequest, ConsentUpdate, ConnectHerbalifeRequest,
+    WebsiteRequest,
 )
+
+
+def _public_distributor(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Distributor view safe to return to the client (no secrets)."""
+    return {
+        "id": d["id"], "name": d.get("name", ""), "email": d.get("email"),
+        "phone": d.get("phone"), "verified": bool(d.get("verified")),
+        "onboarded": bool(d.get("onboarded")),
+        "consent": d.get("consent") or {},
+        "tracked_platforms": d.get("tracked_platforms") or [],
+        "herbalife_connected": bool(d.get("herbalife_connected")),
+    }
+
+
+def _require_distributor(conn, token: Optional[str]) -> Dict[str, Any]:
+    dist = auth.distributor_for_token(conn, token)
+    if not dist:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return dist
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEB_DIR = BASE_DIR / "web"
@@ -401,6 +422,111 @@ def agent_chat(req: ChatRequest) -> Dict[str, Any]:
 
 
 # ============================================================
+# Onboarding: auth, 2FA, consent, connections
+# ============================================================
+
+def _token(authorization: Optional[str], x_distributor_token: Optional[str]) -> Optional[str]:
+    if x_distributor_token:
+        return x_distributor_token
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:]
+    return None
+
+
+@app.post("/api/auth/signup")
+def auth_signup(payload: SignupRequest) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        try:
+            return auth.signup_or_login(conn, payload.name, payload.email, payload.phone)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/auth/verify")
+def auth_verify(payload: VerifyRequest) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        try:
+            res = auth.verify_otp(conn, payload.distributor_id, payload.code)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        dist = db.row_to_dict(conn.execute(
+            "SELECT * FROM distributors WHERE id=?", (payload.distributor_id,)).fetchone())
+    res["distributor"] = _public_distributor(dist)
+    return res
+
+
+@app.get("/api/me")
+def me(authorization: Optional[str] = Header(None),
+       x_distributor_token: Optional[str] = Header(None)) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        dist = _require_distributor(conn, _token(authorization, x_distributor_token))
+    return _public_distributor(dist)
+
+
+@app.patch("/api/me/consent")
+def update_consent(payload: ConsentUpdate,
+                   authorization: Optional[str] = Header(None),
+                   x_distributor_token: Optional[str] = Header(None)) -> Dict[str, Any]:
+    import json
+    with db.get_conn() as conn:
+        dist = _require_distributor(conn, _token(authorization, x_distributor_token))
+        sets, vals = [], []
+        if payload.consent is not None:
+            merged = dict(agent_ops.CONSENT_DEFAULTS)
+            merged.update(dist.get("consent") or {})
+            merged.update(payload.consent)
+            sets.append("consent = ?"); vals.append(json.dumps(merged))
+        if payload.tracked_platforms is not None:
+            sets.append("tracked_platforms = ?"); vals.append(json.dumps(payload.tracked_platforms))
+        if payload.name is not None:
+            sets.append("name = ?"); vals.append(payload.name)
+        if payload.onboarded is not None:
+            sets.append("onboarded = ?"); vals.append(1 if payload.onboarded else 0)
+        if sets:
+            sets.append("updated_at = ?"); vals.append(iso_now())
+            vals.append(dist["id"])
+            conn.execute(f"UPDATE distributors SET {', '.join(sets)} WHERE id = ?", vals)
+        dist = db.row_to_dict(conn.execute(
+            "SELECT * FROM distributors WHERE id=?", (dist["id"],)).fetchone())
+    return _public_distributor(dist)
+
+
+@app.post("/api/connect/herbalife")
+def connect_herbalife(payload: ConnectHerbalifeRequest,
+                      authorization: Optional[str] = Header(None),
+                      x_distributor_token: Optional[str] = Header(None)) -> Dict[str, Any]:
+    """
+    Store myHerbalife credentials in the secret store (NEVER the DB) so the
+    agent can pull customer details. The DB only records that a connection
+    exists. Credentials are used solely to identify the distributor's own
+    customers and are not shared.
+    """
+    with db.get_conn() as conn:
+        dist = _require_distributor(conn, _token(authorization, x_distributor_token))
+        secret_store.store_credentials(dist["id"], "herbalife", {
+            "username": payload.username,
+            "password": payload.password,
+            "portal_url": payload.portal_url or "",
+        })
+        conn.execute(
+            "UPDATE distributors SET herbalife_connected=1, herbalife_connected_at=?, updated_at=? WHERE id=?",
+            (iso_now(), iso_now(), dist["id"]))
+    return {"ok": True, "herbalife_connected": True,
+            "message": "Connected. Your credentials are stored securely and never shared."}
+
+
+@app.post("/api/connect/herbalife/revoke")
+def revoke_herbalife(authorization: Optional[str] = Header(None),
+                     x_distributor_token: Optional[str] = Header(None)) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        dist = _require_distributor(conn, _token(authorization, x_distributor_token))
+        secret_store.revoke_credentials(dist["id"], "herbalife")
+        conn.execute("UPDATE distributors SET herbalife_connected=0, updated_at=? WHERE id=?",
+                     (iso_now(), dist["id"]))
+    return {"ok": True, "herbalife_connected": False}
+
+
+# ============================================================
 # Communication plans & enrollments
 # ============================================================
 
@@ -519,6 +645,64 @@ def herbalife_sync() -> Dict[str, Any]:
 def social_sync(days: int = 14) -> Dict[str, Any]:
     with db.get_conn() as conn:
         return connectors.sync_social(conn, days=days)
+
+
+# ============================================================
+# Notifications & email monitor
+# ============================================================
+
+@app.get("/api/notifications")
+def get_notifications(unread_only: bool = False) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        items = notify.list_notifications(conn, unread_only=unread_only)
+        unread = sum(1 for n in items if not n["read"])
+    return {"notifications": items, "unread": unread,
+            "push_configured": notify.push_configured()}
+
+
+@app.post("/api/notifications/{notification_id}/read")
+def read_notification(notification_id: int) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        notify.mark_read(conn, notification_id)
+    return {"ok": True}
+
+
+@app.post("/api/notifications/read-all")
+def read_all_notifications() -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        n = notify.mark_all_read(conn)
+    return {"ok": True, "marked": n}
+
+
+@app.post("/api/agent/scan-email")
+def scan_email() -> Dict[str, Any]:
+    """Scan subscribed emails, triage importance, and notify about what matters."""
+    scan = connectors.scan_email()
+    triaged, created = [], 0
+    with db.get_conn() as conn:
+        for em in scan.get("emails", []):
+            t = ai_agent.triage_email(em.get("subject", ""), em.get("body", ""))
+            triaged.append({**em, **t})
+            if t["important"]:
+                notify.notify(conn, f"📧 {t['summary']}", t["reason"],
+                              level=t["level"], source="email")
+                created += 1
+    return {"configured": scan.get("configured", False),
+            "message": scan.get("message", ""), "scanned": len(triaged),
+            "notified": created, "emails": triaged}
+
+
+# ============================================================
+# Website builder (Google Stitch)
+# ============================================================
+
+@app.post("/api/website/plan")
+def website_plan(req: WebsiteRequest) -> Dict[str, Any]:
+    brief = ai_agent.website_plan(req.product, req.goal, req.brand_voice)
+    result: Dict[str, Any] = {"brief": brief, "ai_enabled": ai_agent.ai_available()}
+    if req.build:
+        result["build"] = connectors.create_site_with_stitch(brief)
+    return result
 
 
 # ============================================================

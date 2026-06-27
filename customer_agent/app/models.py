@@ -129,8 +129,39 @@ class ActionDecision(BaseModel):
     edited_draft: Optional[str] = None
 
 
+class SignupRequest(BaseModel):
+    name: str = ""
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+
+class VerifyRequest(BaseModel):
+    distributor_id: int
+    code: str
+
+
+class ConsentUpdate(BaseModel):
+    consent: Optional[Dict[str, object]] = None
+    tracked_platforms: Optional[List[str]] = None
+    name: Optional[str] = None
+    onboarded: Optional[bool] = None
+
+
+class ConnectHerbalifeRequest(BaseModel):
+    username: str
+    password: str
+    portal_url: Optional[str] = None
+
+
 class ContentIdeaRequest(BaseModel):
     topic: str = "the latest from the Herbalife CEO"
     source_post: str = ""
     platforms: List[str] = Field(default_factory=lambda: ["instagram", "facebook"])
     n: int = 3
+
+
+class WebsiteRequest(BaseModel):
+    product: str
+    goal: str = ""
+    brand_voice: str = ""
+    build: bool = False  # if true, also hand off to Google Stitch

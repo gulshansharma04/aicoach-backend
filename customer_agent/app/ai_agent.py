@@ -454,6 +454,103 @@ def _fallback_content(topic: str, platforms: List[str], n: int) -> List[Dict[str
 
 
 # ============================================================
+# Email triage (monitor subscribed myHerbalife emails)
+# ============================================================
+
+_EMAIL_IMPORTANT = {
+    "order", "shipped", "delivered", "payment", "promotion", "new product",
+    "launch", "deadline", "expires", "action required", "urgent", "invoice",
+    "commission", "bonus", "event", "training", "policy", "recall", "price",
+}
+
+
+def triage_email(subject: str, body: str = "") -> Dict[str, Any]:
+    """Decide if a subscribed email matters and summarize it."""
+    fallback = _fallback_triage(subject, body)
+    system = (
+        "You triage emails for a busy Herbalife distributor. Decide importance "
+        "and give a one-line summary and the reason it matters. Output JSON only."
+    )
+    user = (
+        f"Subject: {subject}\nBody: {body[:1200]}\n"
+        'Return JSON exactly: {"important": true/false, "level": "info|important|urgent", '
+        '"summary": "one line", "reason": "why it matters"}'
+    )
+    data = _chat_json(system, user, max_tokens=200)
+    if data and "important" in data:
+        return {
+            "important": bool(data.get("important")),
+            "level": data.get("level", "info") if data.get("level") in ("info", "important", "urgent") else "info",
+            "summary": str(data.get("summary", subject)).strip(),
+            "reason": str(data.get("reason", "")).strip(),
+        }
+    return fallback
+
+
+def _fallback_triage(subject: str, body: str) -> Dict[str, Any]:
+    text = f"{subject} {body}".lower()
+    hits = [w for w in _EMAIL_IMPORTANT if w in text]
+    important = bool(hits)
+    level = "urgent" if any(w in text for w in ("urgent", "action required", "deadline", "recall", "expires")) \
+        else ("important" if important else "info")
+    return {
+        "important": important,
+        "level": level,
+        "summary": subject or "(no subject)",
+        "reason": (f"Mentions: {', '.join(hits[:3])}." if hits else "Routine update."),
+    }
+
+
+# ============================================================
+# Website builder brief (e.g. a product microsite via Google Stitch)
+# ============================================================
+
+def website_plan(product: str, goal: str = "", brand_voice: str = "") -> Dict[str, Any]:
+    """Produce a structured website brief a design tool (e.g. Google Stitch) can build from."""
+    fallback = _fallback_website(product, goal)
+    system = (
+        "You are a web designer for an independent distributor. Produce a concise, "
+        "buildable single-page website brief for a product microsite. Compliant, "
+        "no income/health claims. Output JSON only."
+    )
+    user = (
+        f"Product: {product}. Goal: {goal or 'introduce the product and capture leads'}. "
+        f"Brand voice: {brand_voice or 'friendly, energetic, trustworthy'}.\n"
+        'Return JSON exactly: {"title": "...", "tagline": "...", '
+        '"sections": [{"name": "Hero", "headline": "...", "body": "...", "cta": "..."}], '
+        '"palette": ["#hex","#hex"], "pages": ["Home"]}'
+    )
+    data = _chat_json(system, user, max_tokens=700)
+    if data and data.get("sections"):
+        return data
+    return fallback
+
+
+def _fallback_website(product: str, goal: str) -> Dict[str, Any]:
+    p = product or "Your Product"
+    return {
+        "title": f"{p} — Official Distributor Site",
+        "tagline": f"Discover {p}",
+        "pages": ["Home"],
+        "palette": ["#0b1020", "#6ea8ff", "#34d399"],
+        "sections": [
+            {"name": "Hero", "headline": f"Meet {p}",
+             "body": f"A simple, honest look at {p} and how it fits your routine.",
+             "cta": "Get in touch"},
+            {"name": "Benefits", "headline": "Why people love it",
+             "body": "Highlight 3 practical, compliant benefits with short, real descriptions.",
+             "cta": "Learn more"},
+            {"name": "About your distributor", "headline": "Here to support you",
+             "body": "A short, personal intro building trust and a way to reach you.",
+             "cta": "Message me"},
+            {"name": "Contact / Lead capture", "headline": "Ready to start?",
+             "body": "Collect name + email/phone so you can follow up personally.",
+             "cta": "Send"},
+        ],
+    }
+
+
+# ============================================================
 # Conversational agent
 # ============================================================
 

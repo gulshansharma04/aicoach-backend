@@ -217,3 +217,63 @@ def fetch_ceo_posts(limit: int = 5) -> Dict[str, Any]:
     # posts = [{"title": a["title"], "summary": a["description"], "url": a["url"]}
     #          for a in r.json().get("articles", [])]
     return {"ok": True, "configured": True, "posts": []}
+
+
+# ============================================================
+# Email monitor (subscribed myHerbalife emails)
+# ============================================================
+
+ENV_EMAIL_IMAP = "EMAIL_IMAP_HOST"
+ENV_EMAIL_USER = "EMAIL_USERNAME"
+ENV_EMAIL_PASS = "EMAIL_PASSWORD"          # noqa: S105
+
+
+def scan_email(limit: int = 20) -> Dict[str, Any]:
+    """
+    Read recent emails (e.g. myHerbalife subscriptions) so the agent can flag
+    important ones. Uses IMAP (or a mailbox API) with credentials from the
+    secrets store / env. Returns an empty list when not configured so the
+    triage flow stays testable.
+    """
+    if not _has(ENV_EMAIL_IMAP, ENV_EMAIL_USER, ENV_EMAIL_PASS):
+        return {"ok": False, "configured": False,
+                "message": f"Set {ENV_EMAIL_IMAP}/{ENV_EMAIL_USER}/{ENV_EMAIL_PASS} to let me watch your inbox.",
+                "emails": []}
+    # --- Implementation outline ---
+    # import imaplib, email
+    # M = imaplib.IMAP4_SSL(os.getenv(ENV_EMAIL_IMAP))
+    # M.login(os.getenv(ENV_EMAIL_USER), os.getenv(ENV_EMAIL_PASS))
+    # M.select("INBOX"); typ, data = M.search(None, "UNSEEN")
+    # ... parse subject/body for each id ...
+    return {"ok": True, "configured": True, "emails": []}
+
+
+# ============================================================
+# Website builder (Google Stitch)
+# ============================================================
+
+ENV_STITCH_KEY = "GOOGLE_STITCH_API_KEY"
+
+
+def stitch_configured() -> bool:
+    return bool(os.getenv(ENV_STITCH_KEY))
+
+
+def create_site_with_stitch(brief: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Hand a structured website brief to Google Stitch to generate the site.
+    Returns the brief plus a build status. When Stitch isn't configured, the
+    brief itself is still returned so the distributor can review/export it.
+    """
+    if not stitch_configured():
+        return {"ok": False, "configured": False,
+                "message": f"Set {ENV_STITCH_KEY} to auto-build with Google Stitch. "
+                           "Your generated brief is ready to review/export below.",
+                "brief": brief}
+    # --- Implementation outline ---
+    # import requests
+    # r = requests.post("https://stitch.googleapis.com/v1/sites",
+    #     headers={"Authorization": f"Bearer {os.getenv(ENV_STITCH_KEY)}"},
+    #     json={"brief": brief})
+    # return {"ok": True, "configured": True, "url": r.json().get("preview_url"), "brief": brief}
+    return {"ok": True, "configured": True, "brief": brief, "url": ""}

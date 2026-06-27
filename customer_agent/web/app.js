@@ -40,9 +40,10 @@
   }
 
   async function api(path, opts = {}) {
-    const res = await fetch(API.apiUrl(path), {
-      headers: { "Content-Type": "application/json" }, ...opts,
-    });
+    const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+    const tok = localStorage.getItem("CRM_TOKEN");
+    if (tok) headers["X-Distributor-Token"] = tok;
+    const res = await fetch(API.apiUrl(path), { ...opts, headers });
     if (!res.ok) {
       let detail = res.statusText;
       try { detail = (await res.json()).detail || detail; } catch (e) {}
@@ -252,6 +253,82 @@
       const d = await api("/api/agent/actions?status=pending");
       $("#apprCount").textContent = d.count ? d.count : "";
     } catch (e) {}
+  }
+
+  // ===================================================================
+  // Notifications + email scan
+  // ===================================================================
+  $("#bellBtn").addEventListener("click", showNotifications);
+  $("#scanEmailBtn").addEventListener("click", scanEmail);
+
+  async function refreshNotifications(fireUrgent) {
+    try {
+      const d = await api("/api/notifications");
+      $("#bellCount").textContent = d.unread ? d.unread : "";
+      if (fireUrgent && "Notification" in window && Notification.permission === "granted") {
+        (d.notifications || []).filter(n => !n.read && n.level === "urgent")
+          .slice(0, 3).forEach(n => new Notification("Jarvis: " + n.title, { body: n.body }));
+      }
+    } catch (e) {}
+  }
+
+  async function showNotifications() {
+    if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
+    let d;
+    try { d = await api("/api/notifications"); } catch (e) { toast("Couldn't load notifications."); return; }
+    const body = !d.notifications.length
+      ? `<p class="muted">No notifications yet.</p>`
+      : d.notifications.map(n => `
+          <div class="rem-item" style="margin-bottom:8px;${n.read ? "opacity:.55;" : ""}">
+            <div class="rem-top"><b>${esc(n.title)}</b><span class="urg ${n.level === "urgent" ? "urgent" : n.level === "important" ? "high" : "low"}">${esc(n.level)}</span></div>
+            <div class="reason">${esc(n.body)}</div>
+            <div class="muted">${esc(n.source)} · ${ago(n.created_at)}</div>
+          </div>`).join("") +
+        `<button class="btn btn-xs" id="markAllRead" style="margin-top:6px;">Mark all read</button>`;
+    openModal("🔔 Notifications", body);
+    $("#markAllRead")?.addEventListener("click", async () => {
+      await api("/api/notifications/read-all", { method: "POST" });
+      closeModal(); refreshNotifications(false);
+    });
+  }
+
+  async function scanEmail() {
+    const btn = $("#scanEmailBtn");
+    btn.disabled = true; btn.textContent = "📧 Checking…";
+    try {
+      const d = await api("/api/agent/scan-email", { method: "POST" });
+      toast(d.configured ? `Scanned ${d.scanned} email(s), ${d.notified} important.` : d.message);
+      refreshNotifications(true);
+    } catch (e) { toast("Error: " + e.message); }
+    finally { btn.disabled = false; btn.textContent = "📧 Check my inbox"; }
+  }
+
+  // ===================================================================
+  // Website builder
+  // ===================================================================
+  $("#genSiteBtn").addEventListener("click", generateSite);
+
+  async function generateSite() {
+    const product = $("#siteProduct").value.trim();
+    if (!product) { toast("Enter a product/brand."); return; }
+    const btn = $("#genSiteBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Designing…';
+    const out = $("#siteResult");
+    try {
+      const d = await api("/api/website/plan", {
+        method: "POST", body: JSON.stringify({ product, goal: $("#siteGoal").value.trim(), build: true }),
+      });
+      const b = d.brief;
+      out.innerHTML = `
+        <div class="focus-item">
+          <div class="focus-top"><b>${esc(b.title)}</b></div>
+          <div class="reason">${esc(b.tagline || "")}</div>
+          ${(b.sections || []).map(s => `
+            <div class="draft-box" style="margin-top:8px;"><b>${esc(s.name)}</b> — ${esc(s.headline || "")}
+            \n${esc(s.body || "")}${s.cta ? "\n[ " + esc(s.cta) + " ]" : ""}</div>`).join("")}
+          <div class="muted" style="margin-top:8px;">${d.build && !d.build.configured ? esc(d.build.message) : "Ready to build."}</div>
+        </div>`;
+    } catch (e) { out.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
+    finally { btn.disabled = false; btn.innerHTML = "Generate website plan"; }
   }
 
   // ===================================================================
@@ -726,6 +803,18 @@
   // init
   // ===================================================================
   async function init() {
+    // Gate behind onboarding: if there's a session, confirm it's onboarded;
+    // otherwise send the user to the Jarvis welcome flow.
+    const tok = localStorage.getItem("CRM_TOKEN");
+    if (!tok) { location.href = "./onboarding.html"; return; }
+    try {
+      const me = await api("/api/me");
+      if (!me.onboarded) { location.href = "./onboarding.html"; return; }
+      const greet = $("#aiBadge");
+      if (me.name) document.querySelector(".brand p").textContent = "Welcome back, " + me.name.split(" ")[0];
+    } catch (e) {
+      localStorage.removeItem("CRM_TOKEN"); location.href = "./onboarding.html"; return;
+    }
     try {
       const h = await api("/api/health");
       aiEnabled = h.ai_enabled;
@@ -737,6 +826,8 @@
     loadCustomers();
     refreshReminderBadge();
     refreshApprovalBadge();
+    refreshNotifications(true);
+    if ("Notification" in window && Notification.permission === "default") Notification.requestPermission();
     loadBriefing(false);
   }
   init();
