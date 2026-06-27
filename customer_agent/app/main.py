@@ -1,0 +1,410 @@
+"""
+Customer Management AI Agent — FastAPI application.
+
+A world-class CRM copilot for independent distributors:
+  • Manage customers, their progress, orders, and social activity
+  • Auto-score relationship health and detect who needs support
+  • Generate personalized tips and ready-to-send call/text messages
+  • Deliver a daily catch-up briefing and proactive reminders to reach out
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+
+from . import database as db
+from . import ai_agent, scoring
+from .scoring import iso_now
+from .models import (
+    CustomerCreate, CustomerUpdate, ProgressCreate, OrderCreate, ActivityCreate,
+    InteractionCreate, ReminderCreate, ReminderUpdate, ChatRequest, DraftRequest,
+)
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+WEB_DIR = BASE_DIR / "web"
+
+app = FastAPI(title="Customer Management AI Agent", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    db.init_db()
+
+
+# ============================================================
+# Internal helpers
+# ============================================================
+
+def _get_customer_row(conn, customer_id: int) -> Dict[str, Any]:
+    row = conn.execute("SELECT * FROM customers WHERE id = ?", (customer_id,)).fetchone()
+    cust = db.row_to_dict(row)
+    if not cust:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return cust
+
+
+def _children(conn, customer_id: int) -> Dict[str, List[Dict[str, Any]]]:
+    return {
+        "orders": db.rows_to_list(conn.execute(
+            "SELECT * FROM orders WHERE customer_id = ? ORDER BY ordered_at DESC", (customer_id,))),
+        "activities": db.rows_to_list(conn.execute(
+            "SELECT * FROM activities WHERE customer_id = ? ORDER BY occurred_at DESC", (customer_id,))),
+        "interactions": db.rows_to_list(conn.execute(
+            "SELECT * FROM interactions WHERE customer_id = ? ORDER BY occurred_at DESC", (customer_id,))),
+        "progress": db.rows_to_list(conn.execute(
+            "SELECT * FROM progress WHERE customer_id = ? ORDER BY created_at DESC", (customer_id,))),
+        "reminders": db.rows_to_list(conn.execute(
+            "SELECT * FROM reminders WHERE customer_id = ? ORDER BY created_at DESC", (customer_id,))),
+    }
+
+
+def _health_for(cust: Dict[str, Any], kids: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+    return scoring.compute_health(
+        cust, kids["orders"], kids["activities"],
+        kids["interactions"], kids["progress"], kids["reminders"],
+    )
+
+
+# ============================================================
+# Health / meta
+# ============================================================
+
+@app.get("/api/health")
+def health() -> Dict[str, Any]:
+    return {"ok": True, "ai_enabled": ai_agent.ai_available()}
+
+
+# ============================================================
+# Customers
+# ============================================================
+
+@app.get("/api/customers")
+def list_customers() -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        custs = db.rows_to_list(conn.execute("SELECT * FROM customers ORDER BY name COLLATE NOCASE"))
+        out = []
+        for c in custs:
+            kids = _children(conn, c["id"])
+            h = _health_for(c, kids)
+            out.append({
+                **c,
+                "health": h,
+                "open_reminders": sum(1 for r in kids["reminders"] if r["status"] == "open"),
+                "order_count": len(kids["orders"]),
+                "total_revenue": h["signals"]["total_revenue"],
+            })
+    out.sort(key=lambda x: x["health"]["score"])  # neediest first
+    return {"customers": out, "count": len(out)}
+
+
+@app.post("/api/customers", status_code=201)
+def create_customer(payload: CustomerCreate) -> Dict[str, Any]:
+    import json
+    now = iso_now()
+    with db.get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO customers
+               (name,email,phone,company,stage,tags,socials,notes,preferred_channel,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (payload.name, payload.email, payload.phone, payload.company, payload.stage,
+             json.dumps(payload.tags), json.dumps(payload.socials), payload.notes,
+             payload.preferred_channel, now, now),
+        )
+        cid = cur.lastrowid
+    return get_customer(cid)
+
+
+@app.get("/api/customers/{customer_id}")
+def get_customer(customer_id: int) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        cust = _get_customer_row(conn, customer_id)
+        kids = _children(conn, customer_id)
+        health = _health_for(cust, kids)
+    return {**cust, **kids, "health": health}
+
+
+@app.patch("/api/customers/{customer_id}")
+def update_customer(customer_id: int, payload: CustomerUpdate) -> Dict[str, Any]:
+    import json
+    fields = payload.model_dump(exclude_unset=True)
+    if not fields:
+        return get_customer(customer_id)
+    sets, vals = [], []
+    for k, v in fields.items():
+        if k in ("tags", "socials"):
+            v = json.dumps(v)
+        sets.append(f"{k} = ?")
+        vals.append(v)
+    sets.append("updated_at = ?")
+    vals.append(iso_now())
+    vals.append(customer_id)
+    with db.get_conn() as conn:
+        _get_customer_row(conn, customer_id)
+        conn.execute(f"UPDATE customers SET {', '.join(sets)} WHERE id = ?", vals)
+    return get_customer(customer_id)
+
+
+@app.delete("/api/customers/{customer_id}")
+def delete_customer(customer_id: int) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        _get_customer_row(conn, customer_id)
+        conn.execute("DELETE FROM customers WHERE id = ?", (customer_id,))
+    return {"deleted": customer_id}
+
+
+# ============================================================
+# Sub-resources
+# ============================================================
+
+@app.post("/api/customers/{customer_id}/progress", status_code=201)
+def add_progress(customer_id: int, p: ProgressCreate) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        _get_customer_row(conn, customer_id)
+        conn.execute(
+            "INSERT INTO progress (customer_id,title,status,note,created_at) VALUES (?,?,?,?,?)",
+            (customer_id, p.title, p.status, p.note, iso_now()),
+        )
+    return get_customer(customer_id)
+
+
+@app.post("/api/customers/{customer_id}/orders", status_code=201)
+def add_order(customer_id: int, o: OrderCreate) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        _get_customer_row(conn, customer_id)
+        conn.execute(
+            "INSERT INTO orders (customer_id,product,amount,status,ordered_at,notes) VALUES (?,?,?,?,?,?)",
+            (customer_id, o.product, o.amount, o.status, o.ordered_at or iso_now(), o.notes),
+        )
+    return get_customer(customer_id)
+
+
+@app.post("/api/customers/{customer_id}/activities", status_code=201)
+def add_activity(customer_id: int, a: ActivityCreate) -> Dict[str, Any]:
+    sentiment = a.sentiment or ai_agent.detect_sentiment(a.content)
+    with db.get_conn() as conn:
+        _get_customer_row(conn, customer_id)
+        conn.execute(
+            """INSERT INTO activities
+               (customer_id,platform,kind,content,sentiment,url,needs_response,occurred_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (customer_id, a.platform, a.kind, a.content, sentiment, a.url,
+             1 if a.needs_response else 0, a.occurred_at or iso_now()),
+        )
+    return get_customer(customer_id)
+
+
+@app.post("/api/customers/{customer_id}/interactions", status_code=201)
+def add_interaction(customer_id: int, i: InteractionCreate) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        _get_customer_row(conn, customer_id)
+        conn.execute(
+            "INSERT INTO interactions (customer_id,channel,summary,occurred_at) VALUES (?,?,?,?)",
+            (customer_id, i.channel, i.summary, i.occurred_at or iso_now()),
+        )
+    return get_customer(customer_id)
+
+
+# ============================================================
+# Reminders
+# ============================================================
+
+@app.get("/api/reminders")
+def list_reminders(status: Optional[str] = "open") -> Dict[str, Any]:
+    q = """SELECT r.*, c.name AS customer_name, c.preferred_channel
+           FROM reminders r JOIN customers c ON c.id = r.customer_id"""
+    params: List[Any] = []
+    if status and status != "all":
+        q += " WHERE r.status = ?"
+        params.append(status)
+    q += " ORDER BY CASE r.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 " \
+         "WHEN 'medium' THEN 2 ELSE 3 END, r.created_at DESC"
+    with db.get_conn() as conn:
+        rows = db.rows_to_list(conn.execute(q, params))
+    return {"reminders": rows, "count": len(rows)}
+
+
+@app.post("/api/customers/{customer_id}/reminders", status_code=201)
+def add_reminder(customer_id: int, r: ReminderCreate) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        _get_customer_row(conn, customer_id)
+        conn.execute(
+            """INSERT INTO reminders
+               (customer_id,kind,reason,draft_message,priority,status,due_date,source,created_at)
+               VALUES (?,?,?,?,?, 'open', ?, 'manual', ?)""",
+            (customer_id, r.kind, r.reason, r.draft_message, r.priority, r.due_date, iso_now()),
+        )
+    return get_customer(customer_id)
+
+
+@app.patch("/api/reminders/{reminder_id}")
+def update_reminder(reminder_id: int, payload: ReminderUpdate) -> Dict[str, Any]:
+    fields = payload.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    sets = [f"{k} = ?" for k in fields]
+    vals = list(fields.values()) + [reminder_id]
+    with db.get_conn() as conn:
+        exists = conn.execute("SELECT id FROM reminders WHERE id = ?", (reminder_id,)).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="Reminder not found")
+        conn.execute(f"UPDATE reminders SET {', '.join(sets)} WHERE id = ?", vals)
+        row = conn.execute("SELECT * FROM reminders WHERE id = ?", (reminder_id,)).fetchone()
+    return db.row_to_dict(row)
+
+
+# ============================================================
+# AI Agent
+# ============================================================
+
+@app.get("/api/customers/{customer_id}/tips")
+def customer_tips(customer_id: int) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        cust = _get_customer_row(conn, customer_id)
+        kids = _children(conn, customer_id)
+        health = _health_for(cust, kids)
+    tips = ai_agent.generate_tips(cust, health, kids["activities"])
+    return {"customer_id": customer_id, "tips": tips, "ai_enabled": ai_agent.ai_available()}
+
+
+@app.post("/api/customers/{customer_id}/draft")
+def customer_draft(customer_id: int, req: DraftRequest) -> Dict[str, Any]:
+    with db.get_conn() as conn:
+        cust = _get_customer_row(conn, customer_id)
+        kids = _children(conn, customer_id)
+        health = _health_for(cust, kids)
+    channel = req.channel or health["suggested_channel"]
+    message = ai_agent.draft_message(cust, health, channel, req.goal)
+    return {"customer_id": customer_id, "channel": channel, "message": message,
+            "ai_enabled": ai_agent.ai_available()}
+
+
+@app.get("/api/agent/digest")
+def agent_digest(auto_create_reminders: bool = True) -> Dict[str, Any]:
+    """
+    The daily catch-up. Scans every customer, ranks who needs attention, drafts
+    an outreach message for each, and (optionally) files proactive reminders so
+    nothing slips through the cracks.
+    """
+    focus: List[Dict[str, Any]] = []
+    totals = {"customers": 0, "needs_attention": 0, "urgent": 0,
+              "healthy": 0, "nurture": 0, "at_risk": 0, "reminders_created": 0}
+
+    with db.get_conn() as conn:
+        custs = db.rows_to_list(conn.execute("SELECT * FROM customers"))
+        totals["customers"] = len(custs)
+
+        enriched = []
+        for c in custs:
+            kids = _children(conn, c["id"])
+            h = _health_for(c, kids)
+            totals[h["status"]] = totals.get(h["status"], 0) + 1
+            enriched.append((c, kids, h))
+
+        # Rank: needs-support first, then urgency, then lowest health.
+        urgency_rank = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+        enriched.sort(key=lambda t: (
+            0 if t[2]["needs_support"] else 1,
+            urgency_rank.get(t[2]["suggested_urgency"], 4),
+            t[2]["score"],
+        ))
+
+        for c, kids, h in enriched:
+            if not h["needs_support"]:
+                continue
+            totals["needs_attention"] += 1
+            if h["suggested_urgency"] == "urgent":
+                totals["urgent"] += 1
+
+            channel = h["suggested_channel"]
+            message = ai_agent.draft_message(c, h, channel, h["support_reason"] or "check in")
+
+            if auto_create_reminders:
+                existing = conn.execute(
+                    "SELECT id FROM reminders WHERE customer_id = ? AND source = 'agent' AND status = 'open'",
+                    (c["id"],),
+                ).fetchone()
+                if not existing:
+                    conn.execute(
+                        """INSERT INTO reminders
+                           (customer_id,kind,reason,draft_message,priority,status,due_date,source,created_at)
+                           VALUES (?,?,?,?,?, 'open', ?, 'agent', ?)""",
+                        (c["id"], channel if channel in ("call", "text") else "follow_up",
+                         h["support_reason"], message, h["suggested_urgency"],
+                         iso_now(), iso_now()),
+                    )
+                    totals["reminders_created"] += 1
+
+            focus.append({
+                "customer_id": c["id"],
+                "name": c["name"],
+                "preferred_channel": c["preferred_channel"],
+                "health": h,
+                "suggested_channel": channel,
+                "draft_message": message,
+            })
+
+    briefing = ai_agent.daily_briefing(focus, totals)
+    return {"briefing": briefing, "totals": totals, "focus": focus,
+            "ai_enabled": ai_agent.ai_available()}
+
+
+@app.post("/api/agent/chat")
+def agent_chat(req: ChatRequest) -> Dict[str, Any]:
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="message is required")
+
+    with db.get_conn() as conn:
+        if req.customer_id:
+            cust = _get_customer_row(conn, req.customer_id)
+            kids = _children(conn, req.customer_id)
+            h = _health_for(cust, kids)
+            context = (
+                f"Single customer focus: {cust['name']} "
+                f"(stage {cust['stage']}, channel {cust['preferred_channel']}).\n"
+                f"Health {h['score']}/100 ({h['status']}). Reasons: {h['reasons']}.\n"
+                f"Signals: {h['signals']}.\n"
+                f"Recent orders: {[{'product': o['product'], 'amount': o['amount'], 'status': o['status']} for o in kids['orders'][:5]]}\n"
+                f"Recent social: {[{'platform': a['platform'], 'kind': a['kind'], 'content': a['content'], 'sentiment': a['sentiment']} for a in kids['activities'][:5]]}\n"
+                f"Notes: {cust['notes']}"
+            )
+        else:
+            custs = db.rows_to_list(conn.execute("SELECT * FROM customers"))
+            lines = []
+            for c in custs:
+                kids = _children(conn, c["id"])
+                h = _health_for(c, kids)
+                lines.append(
+                    f"- {c['name']}: {h['score']}/100 ({h['status']}), "
+                    f"{'NEEDS SUPPORT: ' + h['support_reason'] if h['needs_support'] else 'ok'}; "
+                    f"channel {h['suggested_channel']}"
+                )
+            context = "Customer portfolio overview:\n" + ("\n".join(lines) if lines else "No customers yet.")
+
+    answer = ai_agent.agent_chat(req.message, context)
+    return {"answer": answer, "ai_enabled": ai_agent.ai_available()}
+
+
+# ============================================================
+# Static web app (served last so /api/* wins)
+# ============================================================
+
+if WEB_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
+else:
+    @app.get("/")
+    def root() -> JSONResponse:
+        return JSONResponse({"service": "Customer Management AI Agent", "docs": "/docs"})

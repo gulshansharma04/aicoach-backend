@@ -1,0 +1,9 @@
+# Local database & secrets
+data/
+*.db
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/

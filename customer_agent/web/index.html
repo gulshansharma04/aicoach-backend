@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Distributor CRM — AI Customer Agent</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- ===== Top bar ===== -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">◆</div>
+        <div>
+          <h1>Distributor CRM</h1>
+          <p>Your AI customer-management agent</p>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span id="aiBadge" class="chip"><span class="dot"></span> checking…</span>
+        <button id="runDigestBtn" class="btn btn-primary">⚡ Run daily catch-up</button>
+      </div>
+    </header>
+
+    <!-- ===== Nav ===== -->
+    <nav class="tabs">
+      <button class="tab active" data-tab="dashboard">Dashboard</button>
+      <button class="tab" data-tab="customers">Customers</button>
+      <button class="tab" data-tab="reminders">Reminders <span id="remCount" class="badge"></span></button>
+      <button class="tab" data-tab="ask">Ask AI</button>
+    </nav>
+
+    <main>
+      <!-- ===== Dashboard ===== -->
+      <section id="tab-dashboard" class="tabpane active">
+        <div class="card briefing-card">
+          <div class="card-head">
+            <h2>🤖 Today's briefing</h2>
+            <span id="briefingTime" class="muted"></span>
+          </div>
+          <div class="card-body">
+            <p id="briefingText" class="briefing-text">Run the daily catch-up to see who needs you today.</p>
+          </div>
+        </div>
+
+        <div id="statTiles" class="stat-tiles"></div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>🎯 Needs your attention</h2>
+            <span class="muted">Ranked by urgency</span>
+          </div>
+          <div class="card-body">
+            <div id="focusList" class="focus-list">
+              <p class="muted">No catch-up run yet. Click <b>Run daily catch-up</b> above.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== Customers ===== -->
+      <section id="tab-customers" class="tabpane">
+        <div class="toolbar">
+          <input id="customerSearch" class="input" placeholder="Search customers…" />
+          <button id="addCustomerBtn" class="btn btn-primary">+ Add customer</button>
+        </div>
+        <div id="customerList" class="customer-grid"></div>
+      </section>
+
+      <!-- ===== Reminders ===== -->
+      <section id="tab-reminders" class="tabpane">
+        <div class="toolbar">
+          <h2 style="margin:0;font-size:15px;">Reminders to reach out</h2>
+          <select id="reminderFilter" class="input" style="max-width:160px;">
+            <option value="open">Open</option>
+            <option value="all">All</option>
+            <option value="done">Done</option>
+            <option value="dismissed">Dismissed</option>
+          </select>
+        </div>
+        <div id="reminderList" class="reminder-list"></div>
+      </section>
+
+      <!-- ===== Ask AI ===== -->
+      <section id="tab-ask" class="tabpane">
+        <div class="card">
+          <div class="card-head"><h2>💬 Ask your AI agent</h2></div>
+          <div class="card-body">
+            <div id="chatLog" class="chat-log">
+              <div class="chat-msg bot">Ask me things like <i>“Who should I call today?”</i>, <i>“Draft a reorder text for James”</i>, or <i>“Summarize my at-risk customers.”</i></div>
+            </div>
+            <div class="chat-input-row">
+              <input id="chatInput" class="input" placeholder="Type your question…" />
+              <button id="chatSendBtn" class="btn btn-primary">Send</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ===== Customer detail drawer ===== -->
+  <div id="drawerOverlay" class="drawer-overlay hidden">
+    <aside id="drawer" class="drawer">
+      <div class="drawer-head">
+        <div id="drawerTitle" class="drawer-title"></div>
+        <button id="drawerClose" class="btn btn-ghost">✕</button>
+      </div>
+      <div id="drawerBody" class="drawer-body"></div>
+    </aside>
+  </div>
+
+  <!-- ===== Generic modal ===== -->
+  <div id="modalOverlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head"><h3 id="modalTitle"></h3><button id="modalClose" class="btn btn-ghost">✕</button></div>
+      <div id="modalBody" class="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="./config.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
