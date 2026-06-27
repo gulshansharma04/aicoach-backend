@@ -373,6 +373,7 @@
   // Customers
   // ===================================================================
   $("#addCustomerBtn").addEventListener("click", openAddCustomer);
+  $("#importLeadsBtn").addEventListener("click", openImportLeads);
   $("#customerSearch").addEventListener("input", () => renderCustomerList());
 
   async function loadCustomers() {
@@ -633,6 +634,61 @@
         toast("Customer added."); closeModal(); await loadCustomers(); openCustomer(c.id);
       } catch (e) { toast("Error: " + e.message); }
     });
+  }
+
+  function openImportLeads() {
+    openModal("📥 Import leads from social", `
+      <label class="fld">Platform</label>
+      <select class="input" id="ilPlatform" style="width:100%;">
+        <option value="instagram">Instagram</option>
+        <option value="facebook">Facebook</option>
+        <option value="tiktok">TikTok</option>
+        <option value="x">X (Twitter)</option>
+        <option value="linkedin">LinkedIn</option>
+      </select>
+      <label class="fld">Paste handles, profile links, or a whole comment thread</label>
+      <textarea class="input" id="ilText" style="min-height:120px;" placeholder="@jane_doe
+instagram.com/mark.fit
+Loved this! — @sara.wellness
+..."></textarea>
+      <button class="btn btn-primary full" id="ilPreviewBtn" style="margin-top:12px;width:100%;">Find leads</button>
+      <div id="ilPreview" style="margin-top:12px;"></div>`);
+    $("#ilPreviewBtn").addEventListener("click", previewLeads);
+  }
+
+  async function previewLeads() {
+    const text = $("#ilText").value.trim();
+    const platform = $("#ilPlatform").value;
+    if (!text) { toast("Paste something first."); return; }
+    const box = $("#ilPreview");
+    box.innerHTML = '<span class="spinner"></span> Scanning…';
+    try {
+      const d = await api("/api/leads/import", {
+        method: "POST", body: JSON.stringify({ text, platform, preview: true }),
+      });
+      if (!d.count) { box.innerHTML = `<p class="muted">No handles found. Make sure they include @ or a profile link.</p>`; return; }
+      box.innerHTML = `
+        <div class="muted" style="margin-bottom:8px;">Found ${d.count} lead(s) — uncheck any you don't want:</div>
+        ${d.parsed.map((L, i) => `
+          <label style="display:flex;gap:8px;align-items:center;padding:8px;border:1px solid var(--border);border-radius:10px;margin-bottom:6px;">
+            <input type="checkbox" class="il-chk" data-i="${i}" checked />
+            <div><b>${esc(L.name)}</b> <span class="muted">${esc(L.handle)}</span>${L.note ? `<div class="muted">${esc(L.note)}</div>` : ""}</div>
+          </label>`).join("")}
+        <button class="btn btn-primary full" id="ilCreateBtn" style="margin-top:8px;width:100%;">Import selected</button>`;
+      $("#ilCreateBtn").addEventListener("click", () => createLeads(d.parsed, platform));
+    } catch (e) { box.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
+  }
+
+  async function createLeads(parsed, platform) {
+    const chosen = $$(".il-chk").filter(c => c.checked).map(c => parsed[+c.dataset.i]);
+    if (!chosen.length) { toast("Select at least one lead."); return; }
+    try {
+      const d = await api("/api/leads/import", {
+        method: "POST", body: JSON.stringify({ platform, leads: chosen, preview: false }),
+      });
+      toast(`Imported ${d.created_count} lead(s)${d.skipped ? `, skipped ${d.skipped} duplicate(s)` : ""}.`);
+      closeModal(); loadCustomers();
+    } catch (e) { toast("Error: " + e.message); }
   }
 
   function openEditCustomer(c) {

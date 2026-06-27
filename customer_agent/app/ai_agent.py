@@ -390,6 +390,60 @@ def _fallback_narration(d: Dict[str, Any]) -> str:
 
 
 # ============================================================
+# Lead extraction (turn pasted handles / comment threads into leads)
+# ============================================================
+
+import re as _re
+
+# @handle, optionally inside a profile URL.
+_HANDLE_RE = _re.compile(r"@([A-Za-z0-9._]{2,30})")
+_URL_RE = _re.compile(
+    r"(?:instagram\.com|facebook\.com|tiktok\.com|x\.com|twitter\.com|linkedin\.com/in)/"
+    r"([A-Za-z0-9._\-]{2,40})", _re.IGNORECASE)
+
+
+def extract_leads(text: str, platform: str = "instagram") -> List[Dict[str, str]]:
+    """
+    Parse pasted text (a list of @handles, profile links, or a whole comment
+    thread) into lead records: [{"name","handle","note"}]. AI extracts names +
+    intent when available; regex guarantees handles are caught either way.
+    """
+    text = text or ""
+    found: Dict[str, Dict[str, str]] = {}
+
+    def add(handle: str, name: str = "", note: str = "") -> None:
+        h = handle.strip().lstrip("@").strip("/").lower()
+        if not h or h in ("p", "reel", "explore", "share"):
+            return
+        if h not in found:
+            found[h] = {"handle": "@" + h, "name": (name or "@" + h).strip(), "note": note.strip()}
+        elif name and found[h]["name"].startswith("@"):
+            found[h]["name"] = name.strip()
+
+    # Regex pass — always runs so nothing is missed.
+    for m in _URL_RE.finditer(text):
+        add(m.group(1))
+    for m in _HANDLE_RE.finditer(text):
+        add(m.group(1))
+
+    # AI pass — enrich with real names / intent from comment threads.
+    data = _chat_json(
+        "You extract sales leads from pasted social media text (comment threads, "
+        "handle lists, DMs). Return each distinct person once. Output JSON only.",
+        f"Platform: {platform}.\nText:\n{text[:4000]}\n"
+        'Return JSON exactly: {"leads":[{"name":"display name or @handle","handle":"@handle","note":"short intent if any"}]}',
+        max_tokens=700,
+    )
+    if data and isinstance(data.get("leads"), list):
+        for L in data["leads"]:
+            h = str(L.get("handle", "")).strip()
+            if h:
+                add(h, str(L.get("name", "")), str(L.get("note", "")))
+
+    return list(found.values())
+
+
+# ============================================================
 # Content inspiration (e.g. repost based on Herbalife CEO news)
 # ============================================================
 

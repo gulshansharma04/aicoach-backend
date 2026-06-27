@@ -235,9 +235,27 @@ def get_conn() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+# Additive columns introduced after the initial schema. Applied idempotently so
+# existing databases pick them up without a manual migration.
+_MIGRATIONS = {
+    "customers": [
+        ("source", "TEXT NOT NULL DEFAULT ''"),  # where a lead came from (e.g. "instagram")
+    ],
+}
+
+
+def _apply_migrations(conn: sqlite3.Connection) -> None:
+    for table, cols in _MIGRATIONS.items():
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in cols:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
 def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        _apply_migrations(conn)
 
 
 def row_to_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:

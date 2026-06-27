@@ -160,6 +160,15 @@ class ContentIdeaRequest(BaseModel):
     n: int = 3
 
 
+class LeadImportRequest(BaseModel):
+    text: str = ""                     # pasted handles / links / comment thread
+    platform: str = "instagram"
+    stage: str = "prospect"
+    tags: List[str] = Field(default_factory=lambda: ["lead"])
+    preview: bool = False             # if true, parse only — don't create
+    leads: Optional[List[Dict[str, str]]] = None  # optional explicit list to create
+
+
 class WebsiteRequest(BaseModel):
     product: str
     goal: str = ""

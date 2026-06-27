@@ -231,6 +231,31 @@ def test_notifications():
     check("notification listed", n["unread"] >= 1)
 
 
+def test_extract_leads():
+    text = "@jane_doe loved it!\ninstagram.com/mark.fit\nthanks — @sara.wellness\n@jane_doe again"
+    leads = ai_agent.extract_leads(text, "instagram")
+    handles = {L["handle"] for L in leads}
+    check("extracts @handle", "@jane_doe" in handles)
+    check("extracts profile-url handle", "@mark.fit" in handles)
+    check("dedupes repeats", sum(1 for L in leads if L["handle"] == "@jane_doe") == 1)
+
+
+def test_lead_import_api():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    db.init_db(); reset()
+    c = TestClient(app)
+    payload = {"text": "@lead_one\ninstagram.com/lead_two", "platform": "instagram"}
+    prev = c.post("/api/leads/import", json={**payload, "preview": True}).json()
+    check("preview parses leads", prev["count"] == 2)
+    res = c.post("/api/leads/import", json=payload).json()
+    check("import creates leads", res["created_count"] == 2)
+    dup = c.post("/api/leads/import", json=payload).json()
+    check("import skips duplicates", dup["skipped"] == 2 and dup["created_count"] == 0)
+    custs = c.get("/api/customers").json()
+    check("imported leads are prospects", any(x["stage"] == "prospect" for x in custs["customers"]))
+
+
 if __name__ == "__main__":
     print("Running customer-agent tests...\n")
     for fn in [test_sentiment, test_scoring_healthy, test_scoring_negative_triggers_call,
@@ -238,7 +263,8 @@ if __name__ == "__main__":
                test_api_roundtrip, test_travel_detection, test_risk_policy,
                test_content_ideas, test_connectors_status, test_plans_monitor_briefing,
                test_auth_and_consent_flow, test_consent_gates_monitor, test_secret_store,
-               test_email_triage_and_website, test_notifications]:
+               test_email_triage_and_website, test_notifications,
+               test_extract_leads, test_lead_import_api]:
         print(fn.__name__)
         fn()
     print(f"\n{_passed} passed, {_failed} failed")

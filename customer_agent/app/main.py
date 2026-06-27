@@ -28,7 +28,7 @@ from .models import (
     InteractionCreate, ReminderCreate, ReminderUpdate, ChatRequest, DraftRequest,
     PlanCreate, EnrollRequest, ActionDecision, ContentIdeaRequest,
     SignupRequest, VerifyRequest, ConsentUpdate, ConnectHerbalifeRequest,
-    WebsiteRequest,
+    WebsiteRequest, LeadImportRequest,
 )
 
 
@@ -198,6 +198,51 @@ def delete_customer(customer_id: int) -> Dict[str, Any]:
         _get_customer_row(conn, customer_id)
         conn.execute("DELETE FROM customers WHERE id = ?", (customer_id,))
     return {"deleted": customer_id}
+
+
+@app.post("/api/leads/import")
+def import_leads(req: LeadImportRequest) -> Dict[str, Any]:
+    """
+    Turn pasted social handles / profile links / a comment thread into tracked
+    leads. Set preview=true to parse only; pass an explicit `leads` list to
+    create exactly those (e.g. after the user edits the preview).
+    """
+    import json
+    leads = req.leads if req.leads else ai_agent.extract_leads(req.text, req.platform)
+
+    if req.preview:
+        return {"parsed": leads, "count": len(leads), "ai_enabled": ai_agent.ai_available()}
+
+    now = iso_now()
+    created, skipped = [], 0
+    with db.get_conn() as conn:
+        # Build the set of handles we already track on this platform (dedupe).
+        existing = set()
+        for c in db.rows_to_list(conn.execute("SELECT socials FROM customers")):
+            h = (c.get("socials") or {}).get(req.platform, "")
+            if h:
+                existing.add(h.strip().lstrip("@").lower())
+
+        for L in leads:
+            handle = str(L.get("handle", "")).strip()
+            key = handle.lstrip("@").lower()
+            if not key or key in existing:
+                skipped += 1
+                continue
+            existing.add(key)
+            name = str(L.get("name") or handle).strip()
+            note = str(L.get("note") or "").strip()
+            cur = conn.execute(
+                """INSERT INTO customers
+                   (name,email,phone,company,stage,tags,socials,notes,preferred_channel,source,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (name, None, None, "", req.stage,
+                 json.dumps(req.tags), json.dumps({req.platform: handle}),
+                 note, "social", f"{req.platform}_import", now, now))
+            created.append({"id": cur.lastrowid, "name": name, "handle": handle})
+
+    return {"created": created, "created_count": len(created),
+            "skipped": skipped, "ai_enabled": ai_agent.ai_available()}
 
 
 # ============================================================
