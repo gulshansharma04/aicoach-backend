@@ -171,23 +171,60 @@
     });
   }
 
-  // ---------- Voice (Web Speech API) ----------
-  function speak(text) {
-    if (!("speechSynthesis" in window)) { toast("Voice not supported on this browser."); return; }
+  // ---------- Voice ----------
+  const lang = () => localStorage.getItem("CRM_LANG") || "en";
+  let currentAudio = null;
+
+  // Prefer realistic neural TTS from the server; fall back to the device voice.
+  async function speak(text) {
+    if (!text) return;
+    stopSpeaking();
+    $("#voiceStatus").textContent = "🔊 speaking…";
+    try {
+      const res = await fetch(API.apiUrl("/api/voice/tts"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Distributor-Token": localStorage.getItem("CRM_TOKEN") || "" },
+        body: JSON.stringify({ text }),
+      });
+      const ct = res.headers.get("content-type") || "";
+      if (res.ok && ct.includes("audio")) {
+        const blob = await res.blob();
+        currentAudio = new Audio(URL.createObjectURL(blob));
+        currentAudio.onended = () => { $("#voiceStatus").textContent = ""; };
+        await currentAudio.play();
+        return;
+      }
+    } catch (e) { /* fall through to browser TTS */ }
+    speakBrowser(text);
+  }
+
+  function speakBrowser(text) {
+    if (!("speechSynthesis" in window)) { $("#voiceStatus").textContent = ""; return; }
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    u.rate = 1.02; u.pitch = 1.0;
-    $("#voiceStatus").textContent = "🔊 speaking…";
+    const want = lang() === "es" ? "es" : "en";
+    const voices = window.speechSynthesis.getVoices();
+    // Prefer higher-quality named voices in the right language.
+    const pref = voices.filter(v => v.lang?.toLowerCase().startsWith(want));
+    const nice = pref.find(v => /natural|neural|google|premium|enhanced|samantha|paulina|mónica|monica/i.test(v.name)) || pref[0];
+    if (nice) u.voice = nice;
+    u.lang = nice?.lang || (want === "es" ? "es-ES" : "en-US");
+    u.rate = 1.0; u.pitch = 1.0;
     u.onend = () => { $("#voiceStatus").textContent = ""; };
     window.speechSynthesis.speak(u);
   }
-  function stopSpeaking() { window.speechSynthesis?.cancel(); $("#voiceStatus").textContent = ""; }
+
+  function stopSpeaking() {
+    window.speechSynthesis?.cancel();
+    if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+    $("#voiceStatus").textContent = "";
+  }
 
   function startListening() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { toast("Speech recognition not supported here. Try Chrome."); return; }
     const rec = new SR();
-    rec.lang = "en-US"; rec.interimResults = false; rec.maxAlternatives = 1;
+    rec.lang = lang() === "es" ? "es-ES" : "en-US"; rec.interimResults = false; rec.maxAlternatives = 1;
     $("#voiceStatus").textContent = "🎤 listening…";
     rec.onresult = async (ev) => {
       const text = ev.results[0][0].transcript;
@@ -937,6 +974,18 @@ Loved this! — @sara.wellness
     } catch (e) {
       $("#aiBadge").innerHTML = `<span class="dot bad"></span> backend offline`;
     }
+    // Language selector
+    const sel = $("#langSelect");
+    if (sel) {
+      sel.value = lang();
+      sel.addEventListener("change", async () => {
+        localStorage.setItem("CRM_LANG", sel.value);
+        try { await api("/api/me/consent", { method: "PATCH", body: JSON.stringify({ consent: { language: sel.value } }) }); } catch (e) {}
+        toast(sel.value === "es" ? "Cambiado a Español 🇪🇸" : "Switched to English 🇺🇸");
+        loadBriefing(false);
+      });
+    }
+
     loadCustomers();
     refreshReminderBadge();
     refreshApprovalBadge();

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Header
+from pydantic import BaseModel
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -267,11 +268,13 @@ _PRIORITY_RANK = {"hot": 0, "warm": 1, "cold": 2}
 @app.post("/api/leads/qualify")
 def qualify_leads(req: LeadQualifyRequest) -> Dict[str, Any]:
     """Score each lead's intent and draft a first DM. Returned hottest-first."""
+    with db.get_conn() as conn:
+        lang = agent_ops.get_language(conn)
     out = []
     for L in req.leads:
         q = ai_agent.qualify_lead(
             str(L.get("name", "")), str(L.get("handle", "")),
-            str(L.get("note", "")), req.platform)
+            str(L.get("note", "")), req.platform, lang=lang)
         out.append({**L, **q})
     out.sort(key=lambda x: (_PRIORITY_RANK.get(x["priority"], 3), -x["score"]))
     return {"leads": out, "count": len(out), "ai_enabled": ai_agent.ai_available()}
@@ -288,7 +291,8 @@ def qualify_customer(customer_id: int) -> Dict[str, Any]:
         comment = (acts[0]["content"] if acts else "") or cust.get("notes", "")
         platform = (list((cust.get("socials") or {}).keys()) or ["instagram"])[0]
         handle = (cust.get("socials") or {}).get(platform, "")
-        q = ai_agent.qualify_lead(cust["name"], handle, comment, platform)
+        q = ai_agent.qualify_lead(cust["name"], handle, comment, platform,
+                                  lang=agent_ops.get_language(conn))
         pr = {"hot": "high", "warm": "medium", "cold": "low"}.get(q["priority"], "medium")
         existing = conn.execute(
             "SELECT id FROM reminders WHERE customer_id=? AND reason='Send first DM to new lead' AND status='open'",
@@ -414,7 +418,9 @@ def customer_tips(customer_id: int) -> Dict[str, Any]:
         cust = _get_customer_row(conn, customer_id)
         kids = _children(conn, customer_id)
         health = _health_for(cust, kids)
-    tips = ai_agent.generate_tips(cust, health, kids["activities"])
+    with db.get_conn() as conn:
+        lang = agent_ops.get_language(conn)
+    tips = ai_agent.generate_tips(cust, health, kids["activities"], lang=lang)
     return {"customer_id": customer_id, "tips": tips, "ai_enabled": ai_agent.ai_available()}
 
 
@@ -424,8 +430,9 @@ def customer_draft(customer_id: int, req: DraftRequest) -> Dict[str, Any]:
         cust = _get_customer_row(conn, customer_id)
         kids = _children(conn, customer_id)
         health = _health_for(cust, kids)
+        lang = agent_ops.get_language(conn)
     channel = req.channel or health["suggested_channel"]
-    message = ai_agent.draft_message(cust, health, channel, req.goal)
+    message = ai_agent.draft_message(cust, health, channel, req.goal, lang=lang)
     return {"customer_id": customer_id, "channel": channel, "message": message,
             "ai_enabled": ai_agent.ai_available()}
 
@@ -531,8 +538,9 @@ def agent_chat(req: ChatRequest) -> Dict[str, Any]:
                     f"channel {h['suggested_channel']}"
                 )
             context = "Customer portfolio overview:\n" + ("\n".join(lines) if lines else "No customers yet.")
+        lang = agent_ops.get_language(conn)
 
-    answer = ai_agent.agent_chat(req.message, context)
+    answer = ai_agent.agent_chat(req.message, context, lang=lang)
     return {"answer": answer, "ai_enabled": ai_agent.ai_available()}
 
 
@@ -763,6 +771,27 @@ def social_sync(days: int = 14) -> Dict[str, Any]:
 
 
 # ============================================================
+# Voice (realistic neural TTS)
+# ============================================================
+
+class TTSRequest(BaseModel):
+    text: str
+    voice: Optional[str] = None
+
+
+@app.post("/api/voice/tts")
+def voice_tts(req: TTSRequest):
+    """Return MP3 audio for the text using a neural voice (falls back to browser TTS if unavailable)."""
+    from fastapi.responses import Response
+    audio = ai_agent.synthesize_speech(req.text, req.voice)
+    if not audio:
+        return JSONResponse({"available": False,
+                             "message": "Neural TTS needs OPENAI_API_KEY; using device voice instead."},
+                            status_code=200)
+    return Response(content=audio, media_type="audio/mpeg")
+
+
+# ============================================================
 # Notifications & email monitor
 # ============================================================
 
@@ -832,7 +861,9 @@ def ceo_feed(limit: int = 5) -> Dict[str, Any]:
 
 @app.post("/api/content/ideas")
 def content_ideas(req: ContentIdeaRequest) -> Dict[str, Any]:
-    ideas = ai_agent.content_ideas(req.topic, req.source_post, req.platforms, req.n)
+    with db.get_conn() as conn:
+        lang = agent_ops.get_language(conn)
+    ideas = ai_agent.content_ideas(req.topic, req.source_post, req.platforms, req.n, lang=lang)
     return {"topic": req.topic, "ideas": ideas, "ai_enabled": ai_agent.ai_available()}
 
 

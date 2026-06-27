@@ -48,6 +48,45 @@ def ai_available() -> bool:
     return _get_client() is not None
 
 
+def _localize(lang: Optional[str]) -> str:
+    """System-prompt suffix to force a target language."""
+    if (lang or "en").lower().startswith("es"):
+        return (" IMPORTANT: Write your ENTIRE response in natural, warm, "
+                "conversational Latin American Spanish.")
+    return ""
+
+
+# ============================================================
+# Realistic text-to-speech (neural voice)
+# ============================================================
+
+# Friendly, natural-sounding default. Voices: alloy, echo, fable, onyx, nova, shimmer.
+TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "tts-1-hd")
+TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "nova")
+
+
+def synthesize_speech(text: str, voice: Optional[str] = None) -> Optional[bytes]:
+    """
+    Return MP3 audio bytes for `text` using a neural TTS voice, or None if no
+    API key is configured (frontend then falls back to the browser voice).
+    OpenAI TTS auto-detects language, so Spanish text is spoken in Spanish.
+    """
+    client = _get_client()
+    if client is None or not (text or "").strip():
+        return None
+    try:
+        resp = client.audio.speech.create(
+            model=TTS_MODEL, voice=voice or TTS_VOICE,
+            input=text[:4000], response_format="mp3")
+        # SDK returns a binary response; support both access styles.
+        data = getattr(resp, "content", None)
+        if data is None and hasattr(resp, "read"):
+            data = resp.read()
+        return data
+    except Exception:
+        return None
+
+
 def _chat_json(system: str, user: str, max_tokens: int = 500) -> Optional[Dict[str, Any]]:
     """Call the LLM expecting a JSON object back. Returns None on any failure."""
     client = _get_client()
@@ -137,7 +176,7 @@ def detect_sentiment(text: str) -> str:
 # ============================================================
 
 def generate_tips(customer: Dict[str, Any], health: Dict[str, Any],
-                  recent_activities: List[Dict[str, Any]]) -> List[str]:
+                  recent_activities: List[Dict[str, Any]], lang: Optional[str] = None) -> List[str]:
     name = customer.get("name", "this customer")
     sig = health.get("signals", {})
 
@@ -147,6 +186,7 @@ def generate_tips(customer: Dict[str, Any], health: Dict[str, Any],
         "You are an expert sales & relationship coach for an independent "
         "distributor. Give short, specific, actionable tips to nurture ONE "
         "customer relationship. Be warm and practical. Output JSON only."
+        + _localize(lang)
     )
     user = (
         f"Customer: {name} (stage: {customer.get('stage')}, "
@@ -201,7 +241,7 @@ def _fallback_tips(customer: Dict[str, Any], health: Dict[str, Any]) -> List[str
 # ============================================================
 
 def draft_message(customer: Dict[str, Any], health: Dict[str, Any],
-                  channel: str, goal: str) -> str:
+                  channel: str, goal: str, lang: Optional[str] = None) -> str:
     name = customer.get("name", "there")
     first = name.split()[0] if name else "there"
     fallback = _fallback_message(customer, health, channel, goal)
@@ -211,6 +251,7 @@ def draft_message(customer: Dict[str, Any], health: Dict[str, Any],
         "distributor reaching out to a customer. Match the channel: a 'text' "
         "is 1-3 short sentences; a 'call' is a brief talking-points script. "
         "Never sound like spam. Output JSON only."
+        + _localize(lang)
     )
     user = (
         f"Channel: {channel}. Goal: {goal}.\n"
@@ -308,7 +349,7 @@ def _fallback_briefing(focus: List[Dict[str, Any]], totals: Dict[str, Any]) -> s
 # Social reply drafting
 # ============================================================
 
-def draft_reply(customer: Dict[str, Any], activity: Dict[str, Any]) -> str:
+def draft_reply(customer: Dict[str, Any], activity: Dict[str, Any], lang: Optional[str] = None) -> str:
     """Draft a public reply/comment to a customer's social post."""
     name = (customer.get("name") or "there").split()[0]
     content = activity.get("content", "")
@@ -321,6 +362,7 @@ def draft_reply(customer: Dict[str, Any], activity: Dict[str, Any]) -> str:
         "media post for an independent distributor. 1-2 sentences, friendly, "
         "human, never salesy or robotic. If the post is negative, be empathetic "
         "and move the conversation to DM/call. Output JSON only."
+        + _localize(lang)
     )
     user = (
         f"Platform: {platform}. Customer first name: {name}. Sentiment: {sentiment}.\n"
@@ -346,7 +388,7 @@ def _fallback_reply(first: str, content: str, sentiment: str) -> str:
 # Morning briefing narration (voice-ready)
 # ============================================================
 
-def narrate_briefing(data: Dict[str, Any]) -> str:
+def narrate_briefing(data: Dict[str, Any], lang: Optional[str] = None) -> str:
     """Turn the structured briefing into a spoken-style paragraph for TTS."""
     fallback = _fallback_narration(data)
     system = (
@@ -354,6 +396,7 @@ def narrate_briefing(data: Dict[str, Any]) -> str:
         "independent distributor. Read them a short spoken morning briefing "
         "(4-7 sentences) from the data. Sound natural and human, like you're "
         "talking, not reading a report. No markdown, no bullet points, no emojis."
+        + _localize(lang)
     )
     user = f"Briefing data:\n{data}\n\nSpeak the briefing now."
     text = _chat_text(system, user, max_tokens=320)
@@ -460,7 +503,7 @@ _WARM_SIGNALS = {
 
 
 def qualify_lead(name: str, handle: str, comment: str = "",
-                 platform: str = "instagram") -> Dict[str, Any]:
+                 platform: str = "instagram", lang: Optional[str] = None) -> Dict[str, Any]:
     """
     Score a lead's buying intent and draft a first outreach DM.
     Returns {priority: hot|warm|cold, score: 0-100, reason, opener}.
@@ -471,6 +514,7 @@ def qualify_lead(name: str, handle: str, comment: str = "",
         "and write the first DM. Judge buying intent from their comment. The DM "
         "is friendly, personal, 1-2 sentences, references their comment, ends "
         "with a soft question — never spammy or pushy. Output JSON only."
+        + _localize(lang)
     )
     user = (
         f"Platform: {platform}. Lead: {name} ({handle}). "
@@ -521,7 +565,7 @@ def _fallback_qualify(name: str, handle: str, comment: str) -> Dict[str, Any]:
 # ============================================================
 
 def content_ideas(topic: str, source_post: str = "", platforms: Optional[List[str]] = None,
-                  n: int = 3) -> List[Dict[str, str]]:
+                  n: int = 3, lang: Optional[str] = None) -> List[Dict[str, str]]:
     """
     Turn a trending topic / source post (e.g. the latest Herbalife CEO post)
     into ready-to-publish repost drafts for the distributor's own socials.
@@ -535,6 +579,7 @@ def content_ideas(topic: str, source_post: str = "", platforms: Optional[List[st
         "compliant repost ideas in the distributor's own voice — inspirational "
         "and community-focused, NOT making income or health claims. Each idea "
         "has a platform, a caption, and 3-5 hashtags. Output JSON only."
+        + _localize(lang)
     )
     user = (
         f"Topic: {topic}\n"
@@ -681,7 +726,7 @@ def _fallback_website(product: str, goal: str) -> Dict[str, Any]:
 # Conversational agent
 # ============================================================
 
-def agent_chat(message: str, context: str) -> str:
+def agent_chat(message: str, context: str, lang: Optional[str] = None) -> str:
     fallback = ("I can help you manage customers, spot who needs attention, draft "
                 "messages, and surface tips. (Connect an OpenAI API key to enable "
                 "full conversational answers.) Here's what I know right now:\n\n" + context)
@@ -690,6 +735,7 @@ def agent_chat(message: str, context: str) -> str:
         "an independent distributor. Answer using ONLY the provided context about "
         "their customers. Be concise, practical, and action-oriented. If asked to "
         "draft outreach, write it ready-to-send."
+        + _localize(lang)
     )
     user = f"Context about the distributor's customers:\n{context}\n\nQuestion: {message}"
     text = _chat_text(system, user, max_tokens=500)

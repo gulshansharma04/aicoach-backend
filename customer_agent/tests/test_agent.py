@@ -311,6 +311,28 @@ def test_hot_lead_auto_enroll():
     check("cold lead not auto-enrolled", len(ce) == 0)
 
 
+def test_voice_and_language():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    db.init_db(); reset(); seed()
+    c = TestClient(app)
+    # TTS degrades gracefully without an API key.
+    r = c.post("/api/voice/tts", json={"text": "Hello"}).json()
+    check("tts reports unavailable without key", r.get("available") is False)
+    # Localization suffix is applied.
+    check("spanish localization present", "Spanish" in ai_agent._localize("es"))
+    check("english localization empty", ai_agent._localize("en") == "")
+    # Language preference persists via consent.
+    su = c.post("/api/auth/signup", json={"email": "es@example.com"}).json()
+    v = c.post("/api/auth/verify", json={"distributor_id": su["distributor_id"], "code": su["dev_otp"]}).json()
+    hdr = {"X-Distributor-Token": v["token"]}
+    me = c.patch("/api/me/consent", headers=hdr,
+                 json={"consent": {"language": "es"}, "onboarded": True}).json()
+    check("language saved to consent", me["consent"]["language"] == "es")
+    with db.get_conn() as conn:
+        check("get_language reads es", agent_ops.get_language(conn) == "es")
+
+
 if __name__ == "__main__":
     print("Running customer-agent tests...\n")
     for fn in [test_sentiment, test_scoring_healthy, test_scoring_negative_triggers_call,
@@ -320,7 +342,8 @@ if __name__ == "__main__":
                test_auth_and_consent_flow, test_consent_gates_monitor, test_secret_store,
                test_email_triage_and_website, test_notifications,
                test_extract_leads, test_lead_import_api,
-               test_qualify_lead, test_qualify_api_and_import_dm, test_hot_lead_auto_enroll]:
+               test_qualify_lead, test_qualify_api_and_import_dm, test_hot_lead_auto_enroll,
+               test_voice_and_language]:
         print(fn.__name__)
         fn()
     print(f"\n{_passed} passed, {_failed} failed")

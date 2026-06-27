@@ -38,7 +38,12 @@ CONSENT_DEFAULTS: Dict[str, Any] = {
     "find_social": True,
     "social_posting": "auto",      # auto | draft | off  (reply to social posts)
     "ceo_content": "auto",         # auto | draft | off  (repost CEO inspiration)
+    "language": "en",              # en | es  (UI/agent language)
 }
+
+
+def get_language(conn) -> str:
+    return (get_active_consent(conn).get("language") or "en")
 
 
 def get_active_consent(conn) -> Dict[str, Any]:
@@ -420,6 +425,6 @@ def build_briefing(conn, days: int = 7, run_agent: bool = True) -> Dict[str, Any
         "next_steps": next_steps[:6],
         "ops": ops,
     }
-    data["narration"] = ai_agent.narrate_briefing(data)
+    data["narration"] = ai_agent.narrate_briefing(data, lang=get_language(conn))
     data["ai_enabled"] = ai_agent.ai_available()
     return data
