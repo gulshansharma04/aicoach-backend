@@ -470,9 +470,11 @@
       <div class="focus-actions" style="margin-top:10px;">
         <button class="btn btn-xs btn-primary" id="genTips">💡 Get AI tips</button>
         <button class="btn btn-xs" id="genDraft">✍️ Draft message</button>
+        ${c.stage === "prospect" ? `<button class="btn btn-xs" id="genQualify">✨ Qualify lead</button>` : ""}
       </div>
       <div id="tipsBox"></div>
-      <div id="draftBox"></div>`;
+      <div id="draftBox"></div>
+      <div id="qualifyBox"></div>`;
 
     const orders = (c.orders || []).length
       ? `<div class="timeline">${c.orders.map(o => `
@@ -515,6 +517,7 @@
     // wire section actions
     $("#genTips").addEventListener("click", () => loadTips(c.id));
     $("#genDraft").addEventListener("click", () => loadDraft(c));
+    $("#genQualify")?.addEventListener("click", () => loadQualify(c.id));
     $("#editCust").addEventListener("click", () => openEditCustomer(c));
     $("#delCust").addEventListener("click", async () => {
       if (!confirm(`Delete ${c.name}? This removes all their records.`)) return;
@@ -565,6 +568,23 @@
       const d = await api(`/api/customers/${id}/tips`);
       box.innerHTML = `<ul class="tips-list">${d.tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul>
         <div class="muted">${d.ai_enabled ? "AI-generated" : "rule-based (add OpenAI key for richer tips)"}</div>`;
+    } catch (e) { box.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
+  }
+
+  async function loadQualify(id) {
+    const box = $("#qualifyBox");
+    box.innerHTML = '<span class="spinner"></span> Qualifying…';
+    try {
+      const q = await api(`/api/customers/${id}/qualify`, { method: "POST" });
+      const cls = q.priority === "hot" ? "urgent" : q.priority === "warm" ? "medium" : "low";
+      const icon = q.priority === "hot" ? "🔥" : q.priority === "warm" ? "🌤" : "❄️";
+      box.innerHTML = `
+        <div style="margin-top:8px;"><span class="urg ${cls}">${icon} ${esc(q.priority)} · ${q.score}/100</span></div>
+        <div class="reason" style="margin-top:6px;">${esc(q.reason)}</div>
+        <div class="draft-box" style="margin-top:6px;"><b>✍️ First DM (queued to send):</b>\n${esc(q.opener)}</div>
+        <button class="btn btn-xs btn-primary copyQ" style="margin-top:6px;">Copy DM</button>`;
+      box.querySelector(".copyQ").addEventListener("click", () => { navigator.clipboard?.writeText(q.opener); toast("Copied."); });
+      refreshReminderBadge();
     } catch (e) { box.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
   }
 
@@ -656,6 +676,9 @@ Loved this! — @sara.wellness
     $("#ilPreviewBtn").addEventListener("click", previewLeads);
   }
 
+  let ilLeads = [];       // current leads in the import modal
+  let ilQualified = false;
+
   async function previewLeads() {
     const text = $("#ilText").value.trim();
     const platform = $("#ilPlatform").value;
@@ -667,27 +690,62 @@ Loved this! — @sara.wellness
         method: "POST", body: JSON.stringify({ text, platform, preview: true }),
       });
       if (!d.count) { box.innerHTML = `<p class="muted">No handles found. Make sure they include @ or a profile link.</p>`; return; }
-      box.innerHTML = `
-        <div class="muted" style="margin-bottom:8px;">Found ${d.count} lead(s) — uncheck any you don't want:</div>
-        ${d.parsed.map((L, i) => `
-          <label style="display:flex;gap:8px;align-items:center;padding:8px;border:1px solid var(--border);border-radius:10px;margin-bottom:6px;">
-            <input type="checkbox" class="il-chk" data-i="${i}" checked />
-            <div><b>${esc(L.name)}</b> <span class="muted">${esc(L.handle)}</span>${L.note ? `<div class="muted">${esc(L.note)}</div>` : ""}</div>
-          </label>`).join("")}
-        <button class="btn btn-primary full" id="ilCreateBtn" style="margin-top:8px;width:100%;">Import selected</button>`;
-      $("#ilCreateBtn").addEventListener("click", () => createLeads(d.parsed, platform));
+      ilLeads = d.parsed; ilQualified = false;
+      renderImportList(platform);
     } catch (e) { box.innerHTML = `<p class="muted">Error: ${esc(e.message)}</p>`; }
   }
 
-  async function createLeads(parsed, platform) {
-    const chosen = $$(".il-chk").filter(c => c.checked).map(c => parsed[+c.dataset.i]);
+  function priorityBadge(p) {
+    const cls = p === "hot" ? "urgent" : p === "warm" ? "medium" : "low";
+    const icon = p === "hot" ? "🔥" : p === "warm" ? "🌤" : "❄️";
+    return `<span class="urg ${cls}">${icon} ${esc(p)}</span>`;
+  }
+
+  function renderImportList(platform) {
+    const box = $("#ilPreview");
+    box.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">
+        <span class="muted">Found ${ilLeads.length} lead(s)${ilQualified ? " · prioritized" : ""}</span>
+        ${ilQualified ? "" : `<button class="btn btn-xs" id="ilQualifyBtn">✨ Qualify & prioritize</button>`}
+      </div>
+      ${ilLeads.map((L, i) => `
+        <label style="display:flex;gap:8px;align-items:flex-start;padding:9px;border:1px solid var(--border);border-radius:10px;margin-bottom:6px;">
+          <input type="checkbox" class="il-chk" data-i="${i}" checked style="margin-top:3px;" />
+          <div style="flex:1;">
+            <div><b>${esc(L.name)}</b> <span class="muted">${esc(L.handle)}</span> ${L.priority ? priorityBadge(L.priority) : ""}</div>
+            ${L.note ? `<div class="muted">“${esc(L.note)}”</div>` : ""}
+            ${L.reason ? `<div class="muted" style="margin-top:2px;">${esc(L.reason)}</div>` : ""}
+            ${L.opener ? `<div class="draft-box" style="margin-top:6px;"><b>✍️ First DM:</b>\n${esc(L.opener)}</div>` : ""}
+          </div>
+        </label>`).join("")}
+      <button class="btn btn-primary full" id="ilCreateBtn" style="margin-top:8px;width:100%;">Import selected</button>`;
+    $("#ilQualifyBtn")?.addEventListener("click", () => qualifyImportLeads(platform));
+    $("#ilCreateBtn").addEventListener("click", () => createLeads(platform));
+  }
+
+  async function qualifyImportLeads(platform) {
+    const btn = $("#ilQualifyBtn");
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Qualifying…'; }
+    try {
+      const d = await api("/api/leads/qualify", {
+        method: "POST", body: JSON.stringify({ leads: ilLeads, platform }),
+      });
+      ilLeads = d.leads; ilQualified = true;   // already sorted hottest-first
+      renderImportList(platform);
+    } catch (e) { toast("Error: " + e.message); if (btn) { btn.disabled = false; btn.textContent = "✨ Qualify & prioritize"; } }
+  }
+
+  async function createLeads(platform) {
+    const chosen = $$(".il-chk").filter(c => c.checked).map(c => ilLeads[+c.dataset.i]);
     if (!chosen.length) { toast("Select at least one lead."); return; }
     try {
       const d = await api("/api/leads/import", {
         method: "POST", body: JSON.stringify({ platform, leads: chosen, preview: false }),
       });
-      toast(`Imported ${d.created_count} lead(s)${d.skipped ? `, skipped ${d.skipped} duplicate(s)` : ""}.`);
+      const hot = chosen.filter(l => l.priority === "hot").length;
+      toast(`Imported ${d.created_count} lead(s)${d.skipped ? `, skipped ${d.skipped} dup` : ""}${hot ? ` · ${hot} hot 🔥` : ""}.`);
       closeModal(); loadCustomers();
+      if (ilQualified) refreshReminderBadge();
     } catch (e) { toast("Error: " + e.message); }
   }
 

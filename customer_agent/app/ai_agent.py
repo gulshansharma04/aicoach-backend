@@ -444,6 +444,79 @@ def extract_leads(text: str, platform: str = "instagram") -> List[Dict[str, str]
 
 
 # ============================================================
+# Lead qualification (prioritize + draft a first DM)
+# ============================================================
+
+# Strong buying-intent signals vs. softer warm signals.
+_HOT_SIGNALS = {
+    "how much", "price", "cost", "where do i", "where can i", "buy", "order",
+    "interested", "info", "dm me", "send me", "sign me up", "want to try",
+    "how do i start", "link", "more info", "available", "ship to",
+}
+_WARM_SIGNALS = {
+    "love", "amazing", "looks great", "need this", "wow", "👏", "🔥", "😍",
+    "want", "curious", "tell me more", "looks good", "nice",
+}
+
+
+def qualify_lead(name: str, handle: str, comment: str = "",
+                 platform: str = "instagram") -> Dict[str, Any]:
+    """
+    Score a lead's buying intent and draft a first outreach DM.
+    Returns {priority: hot|warm|cold, score: 0-100, reason, opener}.
+    """
+    fallback = _fallback_qualify(name, handle, comment)
+    system = (
+        "You qualify inbound social-media leads for an independent distributor "
+        "and write the first DM. Judge buying intent from their comment. The DM "
+        "is friendly, personal, 1-2 sentences, references their comment, ends "
+        "with a soft question — never spammy or pushy. Output JSON only."
+    )
+    user = (
+        f"Platform: {platform}. Lead: {name} ({handle}). "
+        f"Their comment/context: \"{comment}\"\n"
+        'Return JSON exactly: {"priority":"hot|warm|cold","score":0-100,'
+        '"reason":"why this priority","opener":"the first DM to send"}'
+    )
+    data = _chat_json(system, user, max_tokens=260)
+    if data and data.get("priority") in ("hot", "warm", "cold") and data.get("opener"):
+        try:
+            score = int(data.get("score", fallback["score"]))
+        except (TypeError, ValueError):
+            score = fallback["score"]
+        return {
+            "priority": data["priority"],
+            "score": max(0, min(100, score)),
+            "reason": str(data.get("reason", "")).strip() or fallback["reason"],
+            "opener": str(data["opener"]).strip(),
+        }
+    return fallback
+
+
+def _fallback_qualify(name: str, handle: str, comment: str) -> Dict[str, Any]:
+    first = (name or handle or "there").lstrip("@").split()[0]
+    c = (comment or "").lower()
+    hot = any(s in c for s in _HOT_SIGNALS)
+    warm = any(s in c for s in _WARM_SIGNALS)
+    if hot:
+        priority, score = "hot", 85
+        reason = "Asked about buying / details — strong intent."
+        opener = (f"Hi {first}! Thanks for reaching out 🙌 I'd love to help — "
+                  f"can I send you a couple of options that might be a great fit?")
+    elif warm:
+        priority, score = "warm", 60
+        reason = "Positive interest, no direct ask yet."
+        opener = (f"Hey {first}! So glad this caught your eye 😊 "
+                  f"What are you hoping to work on? Happy to point you the right way.")
+    else:
+        priority, score = "cold", 35
+        reason = "Engaged but no clear intent signal yet."
+        opener = (f"Hi {first}! Thanks for the follow/engagement 🙌 "
+                  f"Let me know if there's ever anything I can help you with!")
+    return {"priority": priority, "score": score, "reason": reason, "opener": opener}
+
+
+# ============================================================
 # Content inspiration (e.g. repost based on Herbalife CEO news)
 # ============================================================
 

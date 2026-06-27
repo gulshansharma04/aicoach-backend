@@ -169,6 +169,11 @@ class LeadImportRequest(BaseModel):
     leads: Optional[List[Dict[str, str]]] = None  # optional explicit list to create
 
 
+class LeadQualifyRequest(BaseModel):
+    leads: List[Dict[str, str]] = Field(default_factory=list)  # {name, handle, note}
+    platform: str = "instagram"
+
+
 class WebsiteRequest(BaseModel):
     product: str
     goal: str = ""

@@ -256,6 +256,43 @@ def test_lead_import_api():
     check("imported leads are prospects", any(x["stage"] == "prospect" for x in custs["customers"]))
 
 
+def test_qualify_lead():
+    hot = ai_agent.qualify_lead("Jane", "@jane", "How much is it? where do i buy?", "instagram")
+    check("buying intent -> hot", hot["priority"] == "hot")
+    check("hot has opener DM", bool(hot["opener"]))
+    warm = ai_agent.qualify_lead("Mark", "@mark", "Love this!!", "instagram")
+    check("positive -> warm", warm["priority"] == "warm")
+    cold = ai_agent.qualify_lead("Sam", "@sam", "", "instagram")
+    check("no signal -> cold", cold["priority"] == "cold")
+
+
+def test_qualify_api_and_import_dm():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    db.init_db(); reset()
+    c = TestClient(app)
+    # batch qualify sorts hottest first
+    q = c.post("/api/leads/qualify", json={"platform": "instagram", "leads": [
+        {"name": "Sam", "handle": "@sam", "note": "nice"},
+        {"name": "Jane", "handle": "@jane", "note": "how much? where to buy"},
+    ]}).json()
+    check("qualify returns leads", q["count"] == 2)
+    check("hottest sorted first", q["leads"][0]["handle"] == "@jane")
+    # importing a qualified lead with opener queues a first-DM reminder
+    imp = c.post("/api/leads/import", json={"platform": "instagram", "leads": [
+        {"name": "Jane", "handle": "@jane", "priority": "hot", "opener": "Hi Jane!"},
+    ]}).json()
+    check("qualified lead imported", imp["created_count"] == 1)
+    cid = imp["created"][0]["id"]
+    detail = c.get(f"/api/customers/{cid}").json()
+    check("first-DM reminder queued", any(r["reason"] == "Send first DM to new lead"
+                                          for r in detail["reminders"]))
+    check("priority saved as tag", "hot" in detail["tags"])
+    # qualify an existing lead endpoint
+    qc = c.post(f"/api/customers/{cid}/qualify").json()
+    check("customer qualify returns priority", qc["priority"] in ("hot", "warm", "cold"))
+
+
 if __name__ == "__main__":
     print("Running customer-agent tests...\n")
     for fn in [test_sentiment, test_scoring_healthy, test_scoring_negative_triggers_call,
@@ -264,7 +301,8 @@ if __name__ == "__main__":
                test_content_ideas, test_connectors_status, test_plans_monitor_briefing,
                test_auth_and_consent_flow, test_consent_gates_monitor, test_secret_store,
                test_email_triage_and_website, test_notifications,
-               test_extract_leads, test_lead_import_api]:
+               test_extract_leads, test_lead_import_api,
+               test_qualify_lead, test_qualify_api_and_import_dm]:
         print(fn.__name__)
         fn()
     print(f"\n{_passed} passed, {_failed} failed")

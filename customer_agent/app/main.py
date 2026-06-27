@@ -28,7 +28,7 @@ from .models import (
     InteractionCreate, ReminderCreate, ReminderUpdate, ChatRequest, DraftRequest,
     PlanCreate, EnrollRequest, ActionDecision, ContentIdeaRequest,
     SignupRequest, VerifyRequest, ConsentUpdate, ConnectHerbalifeRequest,
-    WebsiteRequest, LeadImportRequest,
+    WebsiteRequest, LeadImportRequest, LeadQualifyRequest,
 )
 
 
@@ -232,17 +232,70 @@ def import_leads(req: LeadImportRequest) -> Dict[str, Any]:
             existing.add(key)
             name = str(L.get("name") or handle).strip()
             note = str(L.get("note") or "").strip()
+            priority = str(L.get("priority") or "").strip().lower()
+            opener = str(L.get("opener") or "").strip()
+            tags = list(req.tags) + ([priority] if priority in ("hot", "warm", "cold") else [])
             cur = conn.execute(
                 """INSERT INTO customers
                    (name,email,phone,company,stage,tags,socials,notes,preferred_channel,source,created_at,updated_at)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (name, None, None, "", req.stage,
-                 json.dumps(req.tags), json.dumps({req.platform: handle}),
+                 json.dumps(tags), json.dumps({req.platform: handle}),
                  note, "social", f"{req.platform}_import", now, now))
-            created.append({"id": cur.lastrowid, "name": name, "handle": handle})
+            cid = cur.lastrowid
+            # If qualified with a drafted opener, queue the first DM to send.
+            if opener:
+                pr = {"hot": "high", "warm": "medium", "cold": "low"}.get(priority, "medium")
+                conn.execute(
+                    """INSERT INTO reminders
+                       (customer_id,kind,reason,draft_message,priority,status,due_date,source,created_at)
+                       VALUES (?,?,?,?,?, 'open', ?, 'agent', ?)""",
+                    (cid, "text", "Send first DM to new lead", opener, pr, now, now))
+            created.append({"id": cid, "name": name, "handle": handle, "priority": priority})
 
     return {"created": created, "created_count": len(created),
             "skipped": skipped, "ai_enabled": ai_agent.ai_available()}
+
+
+_PRIORITY_RANK = {"hot": 0, "warm": 1, "cold": 2}
+
+
+@app.post("/api/leads/qualify")
+def qualify_leads(req: LeadQualifyRequest) -> Dict[str, Any]:
+    """Score each lead's intent and draft a first DM. Returned hottest-first."""
+    out = []
+    for L in req.leads:
+        q = ai_agent.qualify_lead(
+            str(L.get("name", "")), str(L.get("handle", "")),
+            str(L.get("note", "")), req.platform)
+        out.append({**L, **q})
+    out.sort(key=lambda x: (_PRIORITY_RANK.get(x["priority"], 3), -x["score"]))
+    return {"leads": out, "count": len(out), "ai_enabled": ai_agent.ai_available()}
+
+
+@app.post("/api/customers/{customer_id}/qualify")
+def qualify_customer(customer_id: int) -> Dict[str, Any]:
+    """Qualify an existing lead from their latest social comment, and queue a first DM."""
+    with db.get_conn() as conn:
+        cust = _get_customer_row(conn, customer_id)
+        acts = db.rows_to_list(conn.execute(
+            "SELECT * FROM activities WHERE customer_id = ? ORDER BY occurred_at DESC LIMIT 1",
+            (customer_id,)))
+        comment = (acts[0]["content"] if acts else "") or cust.get("notes", "")
+        platform = (list((cust.get("socials") or {}).keys()) or ["instagram"])[0]
+        handle = (cust.get("socials") or {}).get(platform, "")
+        q = ai_agent.qualify_lead(cust["name"], handle, comment, platform)
+        pr = {"hot": "high", "warm": "medium", "cold": "low"}.get(q["priority"], "medium")
+        existing = conn.execute(
+            "SELECT id FROM reminders WHERE customer_id=? AND reason='Send first DM to new lead' AND status='open'",
+            (customer_id,)).fetchone()
+        if not existing:
+            conn.execute(
+                """INSERT INTO reminders
+                   (customer_id,kind,reason,draft_message,priority,status,due_date,source,created_at)
+                   VALUES (?,?,?,?,?, 'open', ?, 'agent', ?)""",
+                (customer_id, "text", "Send first DM to new lead", q["opener"], pr, iso_now(), iso_now()))
+    return {"customer_id": customer_id, **q, "ai_enabled": ai_agent.ai_available()}
 
 
 # ============================================================
